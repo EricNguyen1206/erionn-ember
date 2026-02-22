@@ -143,3 +143,6 @@ vite.config.ts.timestamp-*
 .agent/
 .agents/
 AGENTS.md
+
+# Git worktrees
+.worktrees/
