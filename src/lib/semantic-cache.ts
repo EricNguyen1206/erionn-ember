@@ -144,7 +144,7 @@ export class SemanticCache {
 
     // Find best match above threshold
     while (k > 0 && this.index) {
-      const searchResults = this.index.search(quantizedQuery, k);
+      const searchResults = await this.index.search(quantizedQuery, k);
       let staleCandidate = false;
 
       for (const result of searchResults) {
@@ -210,7 +210,7 @@ export class SemanticCache {
 
     const quantizedVector = this.quantizer.quantize(embedding);
 
-    const vectorId = this.index.addItem(quantizedVector);
+    const vectorId = await this.index.addItem(quantizedVector);
 
     const id = vectorId.toString();
     const metadata: CacheMetadata = {

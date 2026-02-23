@@ -129,7 +129,7 @@ export interface InternalStatistics {
 // ============================================================================
 
 export type DistanceMetric = 'cosine' | 'l2' | 'ip';
-export type VectorBackend = 'annoy' | 'hnsw';
+export type VectorBackend = 'annoy' | 'hnsw' | 'turso' | 'qdrant';
 
 export interface VectorIndexConfig {
   /** Vector dimension */

@@ -11,9 +11,9 @@ export async function createVectorIndex(options: VectorIndexConfig): Promise<Vec
 
   const backend: VectorBackend = options.backend ?? (process.env.VECTOR_INDEX_BACKEND as VectorBackend) ?? 'annoy';
 
-  const supportedBackends: VectorBackend[] = ['annoy', 'hnsw'];
+  const supportedBackends: VectorBackend[] = ['annoy', 'hnsw', 'turso', 'qdrant'];
   if (!supportedBackends.includes(backend)) {
-    throw new Error(`Unknown vector index backend: ${backend}. Use 'annoy' or 'hnsw'.`);
+    throw new Error(`Unknown vector index backend: ${backend}. Supported: ${supportedBackends.join(', ')}`);
   }
 
   if (backend === 'annoy') {
@@ -33,6 +33,20 @@ export async function createVectorIndex(options: VectorIndexConfig): Promise<Vec
         `Original error: ${error.message}`
       );
     }
+  }
+
+  if (backend === 'turso') {
+    const { default: TursoVectorIndex } = await import('./turso-index.js');
+    const index = new TursoVectorIndex(dim, maxElements, space as DistanceMetric);
+    await index.init();
+    return index;
+  }
+
+  if (backend === 'qdrant') {
+    const { default: QdrantVectorIndex } = await import('./qdrant-index.js');
+    const index = new QdrantVectorIndex(dim, maxElements, space as DistanceMetric);
+    await index.init();
+    return index;
   }
 
   throw new Error(`Unreachable: unknown backend ${backend}`);

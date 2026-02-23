@@ -34,6 +34,7 @@ const cache = new SemanticCache({
 const embeddingService = new EmbeddingService();
 
 console.error('Starting Erion Ember MCP Server');
+console.error(`  Backend: ${process.env.VECTOR_INDEX_BACKEND || 'annoy'}`);
 console.error(`  Threshold: ${config.similarityThreshold}`);
 
 // Create MCP server

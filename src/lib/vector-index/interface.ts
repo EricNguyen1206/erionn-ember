@@ -24,7 +24,7 @@ export abstract class VectorIndex {
    * @param id - Item ID (optional)
    * @returns ID of added item
    */
-  abstract addItem(vector: number[], id?: number): number;
+  abstract addItem(vector: number[], id?: number): number | Promise<number>;
 
   /**
    * Search for nearest neighbors
@@ -32,7 +32,7 @@ export abstract class VectorIndex {
    * @param k - Number of results
    * @returns Search results
    */
-  abstract search(queryVector: number[], k?: number): SearchResult[];
+  abstract search(queryVector: number[], k?: number): SearchResult[] | Promise<SearchResult[]>;
 
   /**
    * Save index to file
@@ -55,7 +55,7 @@ export abstract class VectorIndex {
    * Get number of items in index
    * @returns Number of items
    */
-  abstract getCount(): number;
+  abstract getCount(): number | Promise<number>;
 }
 
 export default VectorIndex;
