@@ -11,20 +11,26 @@ services:
       - CACHE_DEFAULT_TTL=3600
       - CACHE_SIMILARITY_THRESHOLD=0.85
       - EMBED_WORKERS=4
-      # Semantic similarity via Ollama (pure Go HTTP, no CGO):
-      #   1. Run: docker-compose --profile ollama up
-      #   2. Pull: docker exec erion-ember-ollama-1 ollama pull nomic-embed-text
-      - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=nomic-embed-text
-    depends_on:
-      ollama:
-        condition: service_started
+      # ── Embedder selection (pick ONE) ────────────────────────────────────
+      #
+      # OPTION 1 — ONNX in-process (RECOMMENDED, ~2ms, no external service)
+      # hugot downloads sentence-transformers/all-MiniLM-L6-v2 on first run.
+      # Pre-download: go run ./cmd/download-model/ ./models
+      - MODEL_DIR=/models
+      #
+      # OPTION 2 — Ollama HTTP (pure Go, ~15ms, needs Docker profile "ollama")
+      # Comment out MODEL_DIR above and uncomment below:
+      # - OLLAMA_URL=http://ollama:11434
+      # - OLLAMA_MODEL=nomic-embed-text
+    volumes:
+      # Persist downloaded model across container restarts (~22MB)
+      - model_data:/models
     restart: unless-stopped
 
-  # ─── Ollama (optional, enable for semantic similarity) ───────────────────
+  # ─── Ollama (optional, only needed for Option 2) ─────────────────────────
   ollama:
     image: ollama/ollama:latest
-    profiles: ["ollama"]   # only starts with: docker-compose --profile ollama up
+    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:
@@ -32,4 +38,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  model_data:
   ollama_data:

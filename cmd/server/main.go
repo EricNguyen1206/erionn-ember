@@ -28,24 +28,46 @@ func main() {
 		"max_elements", cfg.MaxElements,
 	)
 
-	// Embedding: pure-Go Ollama HTTP embedder when OLLAMA_URL is set.
-	// Fast path (xxhash exact match) always works without Ollama.
-	// Semantic similarity requires Ollama running with a model pulled.
+	// ── Embedder selection (priority order) ─────────────────────────────────
+	//
+	//  1. MODEL_DIR set → ONNX in-process (hugot, fastest, no HTTP, ~2ms)
+	//  2. OLLAMA_URL set → Ollama HTTP (pure Go, ~15ms per embed)
+	//  3. Neither set   → ZeroEmbedder (exact-match only, 0ms)
+	//
 	var embedder embedding.Embedder
-	if ollamaURL := getEnv("OLLAMA_URL", ""); ollamaURL != "" {
+
+	switch {
+	case getEnv("MODEL_DIR", "") != "":
+		modelDir := getEnv("MODEL_DIR", "")
+		slog.Info("loading ONNX embedder (in-process)", "dir", modelDir)
+		onnx, err := embedding.NewONNXEmbedder(modelDir)
+		if err != nil {
+			slog.Error("ONNX embedder failed, falling back to ZeroEmbedder", "err", err)
+			embedder = embedding.NewZeroEmbedder(cfg.Dim)
+		} else {
+			slog.Info("ONNX ready", "model", "all-MiniLM-L6-v2", "dim", onnx.Dim())
+			cfg.Dim = onnx.Dim()
+			embedder = onnx
+			defer onnx.Close()
+		}
+
+	case getEnv("OLLAMA_URL", "") != "":
+		ollamaURL := getEnv("OLLAMA_URL", "")
 		model := getEnv("OLLAMA_MODEL", "nomic-embed-text")
-		slog.Info("connecting to Ollama", "url", ollamaURL, "model", model)
+		slog.Info("using Ollama HTTP embedder", "url", ollamaURL, "model", model)
 		ollama, err := embedding.NewOllamaEmbedder(ollamaURL, model)
 		if err != nil {
 			slog.Error("Ollama unavailable, falling back to ZeroEmbedder", "err", err)
 			embedder = embedding.NewZeroEmbedder(cfg.Dim)
 		} else {
-			slog.Info("Ollama embedder ready", "dim", ollama.Dim(), "model", model)
-			cfg.Dim = ollama.Dim() // use model's actual dimension
+			slog.Info("Ollama ready", "dim", ollama.Dim())
+			cfg.Dim = ollama.Dim()
 			embedder = ollama
 		}
-	} else {
-		slog.Warn("OLLAMA_URL not set — semantic similarity disabled, exact-match only")
+
+	default:
+		slog.Warn("no embedder configured — semantic similarity disabled (exact-match only)",
+			"hint", "set MODEL_DIR or OLLAMA_URL in .env to enable")
 		embedder = embedding.NewZeroEmbedder(cfg.Dim)
 	}
 
