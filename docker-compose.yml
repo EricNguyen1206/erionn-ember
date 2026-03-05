@@ -1,75 +1,13 @@
-# Erion Ember - LLM Semantic Cache MCP Server
-version: '3.8'
-
+version: "3.9"
 services:
-  # ============================================================================
-  # MAIN APPLICATION
-  # ============================================================================
-  
-  erion-ember:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: erion-ember
-    # MCP server uses stdio transport, no ports needed
+  ember:
+    build: .
+    ports:
+      - "8080:8080"
     environment:
-      - NODE_ENV=production
-      - OLLAMA_URL=http://host.docker.internal:11434
-    volumes:
-      # Mount cache directory for persistence
-      - ./cache:/app/cache
-    networks:
-      - erion-network
+      - HTTP_PORT=8080
+      - CACHE_MAX_ELEMENTS=100000
+      - CACHE_DEFAULT_TTL=3600
+      - CACHE_SIMILARITY_THRESHOLD=0.85
+      - EMBED_WORKERS=4
     restart: unless-stopped
-    # No healthcheck for stdio MCP server
-    stdin_open: true
-    tty: true
-
-  # ============================================================================
-  # MONITORING SERVICES (Optional with --profile monitoring)
-  # ============================================================================
-  
-  influxdb:
-    image: influxdb:2.7
-    container_name: erion-influxdb
-    profiles:
-      - monitoring
-    environment:
-      - INFLUXDB_DB=k6
-      - INFLUXDB_ADMIN_USER=admin
-      - INFLUXDB_ADMIN_PASSWORD=admin123
-      - INFLUXDB_HTTP_AUTH_ENABLED=false
-    volumes:
-      - influxdb_data:/var/lib/influxdb2
-    ports:
-      - "8086:8086"
-    networks:
-      - erion-network
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: erion-grafana
-    profiles:
-      - monitoring
-    environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - ./benchmark/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./benchmark/grafana/datasources:/etc/grafana/provisioning/datasources:ro
-    ports:
-      - "3001:3000"
-    depends_on:
-      - influxdb
-    networks:
-      - erion-network
-
-networks:
-  erion-network:
-    driver: bridge
-
-volumes:
-  influxdb_data:
-    driver: local
