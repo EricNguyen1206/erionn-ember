@@ -28,24 +28,24 @@ func main() {
 		"max_elements", cfg.MaxElements,
 	)
 
-	// Embedding: load ONNX embedder if MODEL_DIR is set, else ZeroEmbedder.
-	// Fast path (xxhash exact match) always works without ONNX.
-	// Semantic similarity search requires MODEL_DIR + an ONNX model file.
+	// Embedding: pure-Go Ollama HTTP embedder when OLLAMA_URL is set.
+	// Fast path (xxhash exact match) always works without Ollama.
+	// Semantic similarity requires Ollama running with a model pulled.
 	var embedder embedding.Embedder
-	if modelDir := os.Getenv("MODEL_DIR"); modelDir != "" {
-		slog.Info("loading ONNX embedder", "dir", modelDir)
-		onnx, err := embedding.NewONNXEmbedder(modelDir)
+	if ollamaURL := getEnv("OLLAMA_URL", ""); ollamaURL != "" {
+		model := getEnv("OLLAMA_MODEL", "nomic-embed-text")
+		slog.Info("connecting to Ollama", "url", ollamaURL, "model", model)
+		ollama, err := embedding.NewOllamaEmbedder(ollamaURL, model)
 		if err != nil {
-			slog.Error("failed to load ONNX embedder, falling back to ZeroEmbedder", "err", err)
+			slog.Error("Ollama unavailable, falling back to ZeroEmbedder", "err", err)
 			embedder = embedding.NewZeroEmbedder(cfg.Dim)
 		} else {
-			slog.Info("ONNX embedder ready", "dim", onnx.Dim())
-			cfg.Dim = onnx.Dim() // use model's actual dimension
-			embedder = onnx
-			defer onnx.Close()
+			slog.Info("Ollama embedder ready", "dim", ollama.Dim(), "model", model)
+			cfg.Dim = ollama.Dim() // use model's actual dimension
+			embedder = ollama
 		}
 	} else {
-		slog.Warn("MODEL_DIR not set — semantic similarity disabled, exact-match only")
+		slog.Warn("OLLAMA_URL not set — semantic similarity disabled, exact-match only")
 		embedder = embedding.NewZeroEmbedder(cfg.Dim)
 	}
 

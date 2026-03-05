@@ -1,5 +1,6 @@
 version: "3.9"
 services:
+  # ─── Erion Ember Cache Service ────────────────────────────────────────────
   ember:
     build: .
     ports:
@@ -10,12 +11,25 @@ services:
       - CACHE_DEFAULT_TTL=3600
       - CACHE_SIMILARITY_THRESHOLD=0.85
       - EMBED_WORKERS=4
-      # Set MODEL_DIR to enable semantic similarity.
-      # The model directory must contain:  model.onnx + tokenizer.json
-      # Download model: hugot downloads it automatically on first run.
-      # Leave empty for exact-match only mode (default, no ONNX required).
-      - MODEL_DIR=
-    # Uncomment to mount a local models directory:
-    # volumes:
-    #   - ./models:/models
+      # Semantic similarity via Ollama (pure Go HTTP, no CGO):
+      #   1. Run: docker-compose --profile ollama up
+      #   2. Pull: docker exec erion-ember-ollama-1 ollama pull nomic-embed-text
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=nomic-embed-text
+    depends_on:
+      ollama:
+        condition: service_started
     restart: unless-stopped
+
+  # ─── Ollama (optional, enable for semantic similarity) ───────────────────
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]   # only starts with: docker-compose --profile ollama up
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
