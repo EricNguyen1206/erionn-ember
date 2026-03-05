@@ -9,8 +9,8 @@ import (
 // Entry holds cached prompt/response data.
 type Entry struct {
 	ID                   string
-	VectorID             int
 	PromptHash           uint64
+	SimHash              uint64 // locality-sensitive fingerprint for similarity search
 	NormalizedPrompt     string
 	CompressedPrompt     []byte
 	CompressedResponse   []byte
@@ -32,7 +32,6 @@ type MetadataStore struct {
 	mu      sync.Mutex
 	maxSize int
 	byHash  map[uint64]*list.Element
-	byVecID map[int]*list.Element
 	lru     *list.List
 }
 
@@ -43,7 +42,6 @@ func NewMetadataStore(maxSize int) *MetadataStore {
 	return &MetadataStore{
 		maxSize: maxSize,
 		byHash:  make(map[uint64]*list.Element, maxSize),
-		byVecID: make(map[int]*list.Element, maxSize),
 		lru:     list.New(),
 	}
 }
@@ -57,19 +55,14 @@ func (s *MetadataStore) Set(hash uint64, e *Entry, ttl time.Duration) {
 		e.ExpiresAt = &exp
 	}
 	if el, ok := s.byHash[hash]; ok {
-		item := el.Value.(*lruItem)
-		delete(s.byVecID, item.entry.VectorID)
-		item.entry = e
-		s.byVecID[e.VectorID] = el
+		el.Value.(*lruItem).entry = e
 		s.lru.MoveToFront(el)
 		return
 	}
 	for s.lru.Len() >= s.maxSize {
 		s.evictOldest()
 	}
-	el := s.lru.PushFront(&lruItem{hash: hash, entry: e})
-	s.byHash[hash] = el
-	s.byVecID[e.VectorID] = el
+	s.byHash[hash] = s.lru.PushFront(&lruItem{hash: hash, entry: e})
 }
 
 // FindByHash looks up by prompt hash. Returns nil if missing or expired.
@@ -91,23 +84,19 @@ func (s *MetadataStore) FindByHash(hash uint64) *Entry {
 	return item.entry
 }
 
-// FindByVectorID looks up by vector index ID.
-func (s *MetadataStore) FindByVectorID(vectorID int) *Entry {
+// ScanAll returns a snapshot of all live (non-expired) entries for SimHash search.
+// Callers must not modify the returned entries.
+func (s *MetadataStore) ScanAll() []*Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	el, ok := s.byVecID[vectorID]
-	if !ok {
-		return nil
+	out := make([]*Entry, 0, s.lru.Len())
+	for el := s.lru.Front(); el != nil; el = el.Next() {
+		item := el.Value.(*lruItem)
+		if !s.isExpired(item.entry) {
+			out = append(out, item.entry)
+		}
 	}
-	item := el.Value.(*lruItem)
-	if s.isExpired(item.entry) {
-		s.removeElement(el)
-		return nil
-	}
-	item.entry.LastAccessed = time.Now()
-	item.entry.AccessCount++
-	s.lru.MoveToFront(el)
-	return item.entry
+	return out
 }
 
 // Delete removes by hash. Returns true if found.
@@ -134,7 +123,6 @@ func (s *MetadataStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byHash = make(map[uint64]*list.Element, s.maxSize)
-	s.byVecID = make(map[int]*list.Element, s.maxSize)
 	s.lru.Init()
 }
 
@@ -164,5 +152,4 @@ func (s *MetadataStore) removeElement(el *list.Element) {
 	item := el.Value.(*lruItem)
 	s.lru.Remove(el)
 	delete(s.byHash, item.hash)
-	delete(s.byVecID, item.entry.VectorID)
 }

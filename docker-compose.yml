@@ -1,6 +1,5 @@
 version: "3.9"
 services:
-  # ─── Erion Ember Cache Service ────────────────────────────────────────────
   ember:
     build: .
     ports:
@@ -9,34 +8,6 @@ services:
       - HTTP_PORT=8080
       - CACHE_MAX_ELEMENTS=100000
       - CACHE_DEFAULT_TTL=3600
+      # SimHash threshold: 0.85 → max 9 differing bits out of 64
       - CACHE_SIMILARITY_THRESHOLD=0.85
-      - EMBED_WORKERS=4
-      # ── Embedder selection (pick ONE) ────────────────────────────────────
-      #
-      # OPTION 1 — ONNX in-process (RECOMMENDED, ~2ms, no external service)
-      # hugot downloads sentence-transformers/all-MiniLM-L6-v2 on first run.
-      # Pre-download: go run ./cmd/download-model/ ./models
-      - MODEL_DIR=/models
-      #
-      # OPTION 2 — Ollama HTTP (pure Go, ~15ms, needs Docker profile "ollama")
-      # Comment out MODEL_DIR above and uncomment below:
-      # - OLLAMA_URL=http://ollama:11434
-      # - OLLAMA_MODEL=nomic-embed-text
-    volumes:
-      # Persist downloaded model across container restarts (~22MB)
-      - model_data:/models
     restart: unless-stopped
-
-  # ─── Ollama (optional, only needed for Option 2) ─────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    profiles: ["ollama"]
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-
-volumes:
-  model_data:
-  ollama_data:

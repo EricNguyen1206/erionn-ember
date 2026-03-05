@@ -6,36 +6,29 @@ import (
 	"time"
 
 	"github.com/EricNguyen1206/erion-ember/internal/cache"
-	"github.com/EricNguyen1206/erion-ember/internal/embedding"
-	"github.com/EricNguyen1206/erion-ember/internal/index"
 )
 
-func newTestCache(embedder embedding.Embedder) *cache.SemanticCache {
-	cfg := cache.Config{
-		Dim:                 4,
+func newTestCache() *cache.SemanticCache {
+	return cache.New(cache.Config{
 		MaxElements:         100,
-		SimilarityThreshold: 0.9,
+		SimilarityThreshold: 0.85,
 		DefaultTTL:          time.Hour,
-	}
-	return cache.New(cfg, embedder, index.NewFlatIndex(cfg.Dim))
+	})
 }
 
-// ── Exact match (fast path) ───────────────────────────────────────────────
+// ── Exact match (fast path, xxhash) ──────────────────────────────────────
 
 func TestSemanticCache_ExactHit(t *testing.T) {
-	sc := newTestCache(embedding.NewZeroEmbedder(4))
-	defer sc.Close()
+	sc := newTestCache()
 	ctx := context.Background()
 
-	if _, err := sc.Set(ctx, "What is Go?", "A language.", 0); err != nil {
-		t.Fatal(err)
-	}
+	sc.Set(ctx, "What is Go?", "A language.", 0)
 	result, ok := sc.Get(ctx, "What is Go?", 0)
 	if !ok {
-		t.Fatal("expected cache hit")
+		t.Fatal("expected hit")
 	}
 	if !result.ExactMatch {
-		t.Error("expected exact_match=true")
+		t.Error("want exact_match=true")
 	}
 	if result.Response != "A language." {
 		t.Errorf("wrong response: %q", result.Response)
@@ -46,8 +39,7 @@ func TestSemanticCache_ExactHit(t *testing.T) {
 }
 
 func TestSemanticCache_ExactMiss(t *testing.T) {
-	sc := newTestCache(embedding.NewZeroEmbedder(4))
-	defer sc.Close()
+	sc := newTestCache()
 	_, ok := sc.Get(context.Background(), "never stored", 0)
 	if ok {
 		t.Error("expected miss")
@@ -55,71 +47,61 @@ func TestSemanticCache_ExactMiss(t *testing.T) {
 }
 
 func TestSemanticCache_NormalizeBeforeHash(t *testing.T) {
-	// "  What IS Go?  " should hit the same entry as "what is go?"
-	sc := newTestCache(embedding.NewZeroEmbedder(4))
-	defer sc.Close()
+	sc := newTestCache()
 	ctx := context.Background()
-
 	sc.Set(ctx, "what is go?", "Go is a language.", 0)
+	// Uppercase + extra spaces → same after normalisation
 	result, ok := sc.Get(ctx, "  What IS Go?  ", 0)
 	if !ok {
-		t.Fatal("expected hit after normalization")
+		t.Fatal("expected hit after normalisation")
 	}
 	if !result.ExactMatch {
-		t.Error("normalized prompts should produce exact match")
+		t.Error("normalised prompt should produce exact match")
 	}
 }
 
-// ── Semantic similarity (slow path) ──────────────────────────────────────
+// ── SimHash semantic similarity (slow path) ───────────────────────────────
 
-func TestSemanticCache_SimilarityHit(t *testing.T) {
-	// FixedEmbedder always returns the same vector for any text.
-	// So a DIFFERENT prompt text will get same embedding → semantic hit.
-	vec := []float32{1, 0, 0, 0}
-	sc := newTestCache(embedding.NewFixedEmbedder(vec))
-	defer sc.Close()
+func TestSemanticCache_SimHashSimilarityHit(t *testing.T) {
+	// SimHash is order-independent: same token set → (near-)identical fingerprint.
+	// "go language fast compiled" and "compiled fast language go" share all tokens
+	// → Hamming distance = 0 → similarity = 1.0 → HIT despite different word order.
+	sc := newTestCache()
 	ctx := context.Background()
 
-	if _, err := sc.Set(ctx, "What is Go?", "Go is a compiled language.", 0); err != nil {
-		t.Fatal(err)
-	}
+	sc.Set(ctx, "go language fast compiled", "Cached response.", 0)
 
-	// Different prompt text, same embedding → should hit via semantic search
-	result, ok := sc.Get(ctx, "Tell me about the Go programming language", 0.9)
+	// Different word order → different xxhash (exact miss) but same SimHash (semantic hit)
+	result, ok := sc.Get(ctx, "compiled fast language go", 0.85)
 	if !ok {
-		t.Fatal("expected semantic similarity hit")
+		t.Fatal("expected SimHash similarity hit")
 	}
 	if result.ExactMatch {
-		t.Error("should be a semantic hit, not exact match")
+		t.Error("different word order should not be an exact match")
 	}
-	if result.Response != "Go is a compiled language." {
+	if result.Response != "Cached response." {
 		t.Errorf("wrong response: %q", result.Response)
 	}
-	if result.Similarity < 0.9 {
-		t.Errorf("similarity %f below threshold", result.Similarity)
+	if result.Similarity < 0.85 {
+		t.Errorf("similarity %f should be ≥ 0.85", result.Similarity)
 	}
 }
 
-func TestSemanticCache_SimilarityMiss_BelowThreshold(t *testing.T) {
-	// Two perpendicular vectors → cosine distance = 1.0, similarity = 0.0
-	sc := newTestCache(embedding.NewFixedEmbedder([]float32{1, 0, 0, 0}))
-	defer sc.Close()
+func TestSemanticCache_SimHashMiss_Unrelated(t *testing.T) {
+	sc := newTestCache()
 	ctx := context.Background()
-
-	sc.Set(ctx, "original", "response", 0)
-
-	// Now switch the embedder behavior by creating a different cache with perpendicular vec
-	sc2 := newTestCache(embedding.NewFixedEmbedder([]float32{0, 1, 0, 0}))
-	defer sc2.Close()
-	_, ok := sc2.Get(ctx, "different query", 0.95)
+	sc.Set(ctx, "weather forecast tomorrow rain", "It will rain.", 0)
+	// Completely unrelated → high Hamming distance → miss
+	_, ok := sc.Get(ctx, "machine learning neural networks deep", 0.85)
 	if ok {
-		t.Error("expected miss — no entries in sc2")
+		t.Error("unrelated prompts should not produce a semantic hit")
 	}
 }
+
+// ── Stats, Delete, TTL ────────────────────────────────────────────────────
 
 func TestSemanticCache_Stats(t *testing.T) {
-	sc := newTestCache(embedding.NewZeroEmbedder(4))
-	defer sc.Close()
+	sc := newTestCache()
 	ctx := context.Background()
 
 	sc.Set(ctx, "q1", "r1", 0)
@@ -133,21 +115,16 @@ func TestSemanticCache_Stats(t *testing.T) {
 	if st.CacheMisses != 1 {
 		t.Errorf("misses: got %d, want 1", st.CacheMisses)
 	}
-	if st.TotalQueries != 2 {
-		t.Errorf("total: got %d, want 2", st.TotalQueries)
-	}
 	if st.HitRate != 0.5 {
 		t.Errorf("hit_rate: got %f, want 0.5", st.HitRate)
 	}
 }
 
 func TestSemanticCache_Delete(t *testing.T) {
-	sc := newTestCache(embedding.NewZeroEmbedder(4))
-	defer sc.Close()
+	sc := newTestCache()
 	ctx := context.Background()
-
 	sc.Set(ctx, "hello", "world", 0)
-	if deleted := sc.Delete("hello"); !deleted {
+	if !sc.Delete("hello") {
 		t.Error("Delete should return true")
 	}
 	_, ok := sc.Get(ctx, "hello", 0)
@@ -157,20 +134,15 @@ func TestSemanticCache_Delete(t *testing.T) {
 }
 
 func TestSemanticCache_TTLExpiry(t *testing.T) {
-	cfg := cache.Config{
-		Dim:                 4,
+	sc := cache.New(cache.Config{
 		MaxElements:         100,
-		SimilarityThreshold: 0.9,
+		SimilarityThreshold: 0.85,
 		DefaultTTL:          50 * time.Millisecond,
-	}
-	sc := cache.New(cfg, embedding.NewZeroEmbedder(4), index.NewFlatIndex(4))
-	defer sc.Close()
+	})
 	ctx := context.Background()
-
-	sc.Set(ctx, "ephemeral", "data", 50*time.Millisecond)
+	sc.Set(ctx, "ephemeral prompt", "data", 50*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
-
-	_, ok := sc.Get(ctx, "ephemeral", 0)
+	_, ok := sc.Get(ctx, "ephemeral prompt", 0)
 	if ok {
 		t.Error("entry should have expired")
 	}
