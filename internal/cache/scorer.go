@@ -8,10 +8,13 @@ import (
 )
 
 const (
-	bm25K1 = 1.2
-	bm25B  = 0.75
-	bm25W  = 0.6 // weight for BM25 in combined score
-	jaccW  = 0.4 // weight for Jaccard in combined score
+	// BM25 parameters
+	bm25K1 = 1.2  // Controls term frequency saturation
+	bm25B  = 0.75 // Controls document length normalization
+	
+	// Hybrid scoring weights
+	weightBM25    = 0.6 // Weight for BM25 in combined score
+	weightJaccard = 0.4 // Weight for Jaccard in combined score
 )
 
 // Scorer computes BM25 + Jaccard hybrid similarity between token slices.
@@ -66,51 +69,57 @@ func (s *Scorer) RemoveDoc(tokens []string) {
 	}
 }
 
-// Score returns a combined [0,1] similarity: 0.6×BM25_normalized + 0.4×Jaccard.
+// Score returns a combined [0,1] similarity score.
+// Result = 0.6 × BM25_normalized + 0.4 × Jaccard.
 func (s *Scorer) Score(query, doc []string) float32 {
-	return float32(bm25W)*s.bm25Normalized(query, doc) + float32(jaccW)*s.Jaccard(query, doc)
+	return float32(weightBM25)*s.bm25Normalized(query, doc) + float32(weightJaccard)*s.Jaccard(query, doc)
 }
 
 // BM25 returns a raw IDF-weighted BM25 score (not normalized to [0,1]).
-// Higher = more relevant. Rare terms (high IDF) naturally score higher than common ones.
-// Use Score() for a bounded [0,1] metric suitable for threshold comparison.
+// Higher = more relevant. Rare terms (high IDF) score significantly higher than common ones.
+// BM25 is superior to simple TF-IDF as it saturates term frequency and penalizes long documents.
 func (s *Scorer) BM25(query, doc []string) float32 {
 	s.mu.RLock()
-	n := s.n
-	sumDL := s.sumDL
-	df := s.df
+	totalDocs := s.n
+	totalLength := s.sumDL
+	docFreqs := s.df
 	s.mu.RUnlock()
 
-	if n == 0 || len(doc) == 0 || len(query) == 0 {
+	if totalDocs == 0 || len(doc) == 0 || len(query) == 0 {
 		return 0
 	}
 
-	avgdl := float64(sumDL) / float64(n)
+	avgdl := float64(totalLength) / float64(totalDocs)
 	docLen := float64(len(doc))
 
-	// term frequency in doc
-	tf := make(map[string]int, len(doc))
-	for _, t := range doc {
-		tf[t]++
+	// Pre-calculate term frequency in the document
+	termFreqs := make(map[string]int, len(doc))
+	for _, token := range doc {
+		termFreqs[token]++
 	}
 
-	var score float64
-	for _, t := range query {
-		docFreq := df[t]
-		idf := math.Log((float64(n-docFreq)+0.5)/(float64(docFreq)+0.5) + 1.0)
+	var totalScore float64
+	for _, queryToken := range query {
+		df := docFreqs[queryToken]
+		
+		// Standard BM25 IDF variant
+		idf := math.Log((float64(totalDocs-df)+0.5)/(float64(df)+0.5) + 1.0)
 		if idf < 0 {
 			idf = 0
 		}
-		termTF := float64(tf[t])
-		if termTF == 0 {
-			continue // term not in doc → zero contribution
+		
+		tf := float64(termFreqs[queryToken])
+		if tf == 0 {
+			continue // Term not in document
 		}
-		numerator := termTF * (bm25K1 + 1)
-		denominator := termTF + bm25K1*(1-bm25B+bm25B*docLen/avgdl)
-		score += idf * numerator / denominator
+		
+		// BM25 main formula: IDF * (f(t,D) * (k1 + 1)) / (f(t,D) + k1 * (1 - b + b * |D|/avgdl))
+		numerator := tf * (bm25K1 + 1)
+		denominator := tf + bm25K1*(1-bm25B+bm25B*docLen/avgdl)
+		totalScore += idf * numerator / denominator
 	}
 
-	return float32(score)
+	return float32(totalScore)
 }
 
 // bm25Normalized returns BM25 score normalized to [0,1].

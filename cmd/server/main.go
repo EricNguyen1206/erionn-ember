@@ -23,7 +23,7 @@ func main() {
 		"addr", httpAddr,
 		"similarity_threshold", cfg.SimilarityThreshold,
 		"max_elements", cfg.MaxElements,
-		"engine", "simhash",
+		"engine", "bm25-jaccard",
 	)
 
 	sc := cache.New(cfg)

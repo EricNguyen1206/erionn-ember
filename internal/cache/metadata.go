@@ -35,6 +35,8 @@ type MetadataStore struct {
 	lru     *list.List
 }
 
+// NewMetadataStore creates a new MetadataStore with the given maxSize.
+// If maxSize is <= 0, a default of 100,000 is used.
 func NewMetadataStore(maxSize int) *MetadataStore {
 	if maxSize <= 0 {
 		maxSize = 100000
@@ -46,41 +48,53 @@ func NewMetadataStore(maxSize int) *MetadataStore {
 	}
 }
 
-// Set stores an entry. ttl == 0 means no expiry.
-func (s *MetadataStore) Set(hash uint64, e *Entry, ttl time.Duration) {
+// Set stores an entry in the cache. ttl == 0 means no expiry.
+// If the cache is full, the least recently used item is evicted.
+func (s *MetadataStore) Set(hash uint64, entry *Entry, ttl time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if ttl > 0 {
-		exp := time.Now().Add(ttl)
-		e.ExpiresAt = &exp
+		expiration := time.Now().Add(ttl)
+		entry.ExpiresAt = &expiration
 	}
-	if el, ok := s.byHash[hash]; ok {
-		el.Value.(*lruItem).entry = e
-		s.lru.MoveToFront(el)
+
+	if element, found := s.byHash[hash]; found {
+		element.Value.(*lruItem).entry = entry
+		s.lru.MoveToFront(element)
 		return
 	}
+
 	for s.lru.Len() >= s.maxSize {
 		s.evictOldest()
 	}
-	s.byHash[hash] = s.lru.PushFront(&lruItem{hash: hash, entry: e})
+
+	newItem := &lruItem{hash: hash, entry: entry}
+	s.byHash[hash] = s.lru.PushFront(newItem)
 }
 
-// FindByHash looks up by prompt hash. Returns nil if missing or expired.
+// FindByHash looks up an entry by its prompt hash.
+// Returns nil if the entry is missing or has expired.
+// On hit, the entry is moved to the front of the LRU list.
 func (s *MetadataStore) FindByHash(hash uint64) *Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	el, ok := s.byHash[hash]
-	if !ok {
+
+	element, found := s.byHash[hash]
+	if !found {
 		return nil
 	}
-	item := el.Value.(*lruItem)
+
+	item := element.Value.(*lruItem)
 	if s.isExpired(item.entry) {
-		s.removeElement(el)
+		s.removeElement(element)
 		return nil
 	}
+
 	item.entry.LastAccessed = time.Now()
 	item.entry.AccessCount++
-	s.lru.MoveToFront(el)
+	s.lru.MoveToFront(element)
+
 	return item.entry
 }
 
@@ -99,15 +113,17 @@ func (s *MetadataStore) ScanAll() []*Entry {
 	return out
 }
 
-// Delete removes by hash. Returns true if found.
+// Delete removes an entry by hash. Returns true if the entry was found and deleted.
 func (s *MetadataStore) Delete(hash uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	el, ok := s.byHash[hash]
-	if !ok {
+
+	element, found := s.byHash[hash]
+	if !found {
 		return false
 	}
-	s.removeElement(el)
+
+	s.removeElement(element)
 	return true
 }
 
