@@ -1,5 +1,7 @@
 # Contributing to Erion Ember
 
+![Erion Ember Logo](assets/logo-horizontal.svg)
+
 Welcome! We're glad you're interested in contributing to Erion Ember. These guidelines will help you get started with the codebase and our development workflow.
 
 ## Local Development Setup

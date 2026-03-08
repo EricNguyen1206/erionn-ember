@@ -1,5 +1,7 @@
 # Architecture — Erion Ember v3
 
+![Erion Ember Logo](../assets/logo-horizontal.svg)
+
 Erion Ember is a standalone Go binary providing semantic caching via a REST/JSON API. It is designed for simplicity, performance, and ease of deployment.
 
 ## Architectural Principles
@@ -19,6 +21,12 @@ graph TD
     Cache --> Comp[LZ4 Compressor]
     Cache --> Store[MetadataStore LRU]
     Cache --> Scorer[BM25 + Jaccard Scorer]
+
+    style Cache fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
+    style Scorer fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
+    style Server fill:#262626,stroke:#171717,color:#fff
+    style Client fill:#fff,stroke:#e5e7eb,color:#262626
+    style Store fill:#fffbeb,stroke:#92400e,color:#92400e
 ```
 
 ### 1. SemanticCache (Orchestrator)
@@ -75,3 +83,17 @@ The slow path latency scales linearly with cache size:
 | 100K entries | ~1 ms |
 
 For deployments exceeding 1 million entries, we recommend sharding or introducing a vector database back-end.
+
+---
+
+## Visual Identity & Design Tokens
+
+Erion Ember follows a cohesive brand identity inspired by the "Ember" visual metaphor.
+
+| Token | Value | Description |
+|-------|-------|-------------|
+| **Primary** | `#f59e0b` | The core radiant amber color. |
+| **Foundation** | `#262626` | Deep charcoal for technical stability. |
+| **Typography** | `Inter` | High-performance sans-serif for UI. |
+
+Full branding specifications can be found in [IDENTITY_GUIDE.md](../assets/IDENTITY_GUIDE.md).

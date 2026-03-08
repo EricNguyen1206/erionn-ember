@@ -1,6 +1,8 @@
 # Erion Ember User Guide
 
-Welcome to Erion Ember! This guide will help you set up and master semantic caching for your LLM applications.
+![Erion Ember Logo](../assets/logo-horizontal.svg)
+
+Welcome to Erion Ember! This guide will help you set up and master semantic caching for your LLM applications. Erion Ember is designed to provide high-performance caching that acts like a persistent, radiant "ember" for your intelligence layer.
 
 ## What is Erion Ember?
 

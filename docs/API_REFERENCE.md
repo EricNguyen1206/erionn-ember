@@ -1,5 +1,7 @@
 # Erion Ember API Reference
 
+![Erion Ember Logo](../assets/logo-horizontal.svg)
+
 The Erion Ember API follows simple REST/JSON patterns. All requests and responses use the `application/json` content type.
 
 ## `POST /v1/cache/get`

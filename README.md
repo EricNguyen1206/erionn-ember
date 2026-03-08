@@ -1,6 +1,8 @@
 # Erion Ember
 
-High-performance semantic cache service for LLM applications. Deployable as a standalone binary — like Redis, but for LLM responses.
+![Erion Ember Logo](assets/logo-horizontal.svg)
+
+High-performance semantic cache service for LLM applications. Deployable as a standalone binary — like Redis, but for LLM responses. Erion Ember acts as a persistent, radiant "ember" for your intelligence layer, providing micro-second speed and semantic awareness.
 
 ## Features
 
@@ -77,6 +79,15 @@ Settings can be tuned via `.env` or environment variables:
 - **Low Hit Rate**: Try lowering `similarity_threshold` to `0.75`.
 - **Port Conflict**: Change `HTTP_PORT` in your `.env` file.
 - **Memory Pressure**: Reduce `CACHE_MAX_ELEMENTS` to fit available RAM.
+
+## Brand Identity
+
+Erion Ember's visual identity is built around the "Core Ember"—a radiant spark of intelligence within a structured data hexagon. 
+
+- **Primary Color**: Amber (`#f59e0b`)
+- **Typography**: Inter (UI), Source Serif 4 (Technical), JetBrains Mono (Code)
+
+See the full [Brand Identity Guide](assets/IDENTITY_GUIDE.md) and [Color Palette](assets/palette.md) for more details.
 
 ## Contributing
 
