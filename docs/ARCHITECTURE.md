@@ -1,152 +1,77 @@
 # Architecture — Erion Ember v3
 
-## Overview
+Erion Ember is a standalone Go binary providing semantic caching via a REST/JSON API. It is designed for simplicity, performance, and ease of deployment.
 
-Erion Ember v3 is a **standalone Go binary** that provides LLM response caching via a REST/JSON API. It is designed to be deployed like Redis — no orchestration, no sidecar services, no model files.
+## Architectural Principles
 
-## Components
+- **Simplicity**: Single binary, zero external dependencies.
+- **Performance**: Two-tier matching (Fast & Slow paths) ensures sub-microsecond response times for identical queries.
+- **Efficiency**: Memory-safe implementation with transparent LZ4 compression.
+- **Robustness**: Incremental IDF updates ensure similarity matching improves as the cache grows.
 
+## System Components
+
+```mermaid
+graph TD
+    Client[Client Application] --> Server[HTTP Server :8080]
+    Server --> Cache[SemanticCache Orchestrator]
+    Cache --> Norm[Normalizer / xxhash]
+    Cache --> Comp[LZ4 Compressor]
+    Cache --> Store[MetadataStore LRU]
+    Cache --> Scorer[BM25 + Jaccard Scorer]
 ```
-┌─────────────────────────────────────────────────────┐
-│                 erion-ember (binary)                │
-│                                                     │
-│  ┌──────────┐   ┌───────────────────────────────┐  │
-│  │HTTP Server│   │       SemanticCache           │  │
-│  │:8080     │──▶│                               │  │
-│  └──────────┘   │  ┌──────────┐ ┌────────────┐  │  │
-│                 │  │Normalizer│ │ Compressor │  │  │
-│                 │  │ xxhash   │ │    LZ4     │  │  │
-│                 │  └────┬─────┘ └────────────┘  │  │
-│                 │       │                        │  │
-│                 │  ┌────▼──────────────────────┐ │  │
-│                 │  │     MetadataStore (LRU)   │ │  │
-│                 │  │  map[uint64]*Entry + list  │ │  │
-│                 │  └───────────────────────────┘ │  │
-│                 │                               │  │
-│                 │  ┌───────────────────────────┐ │  │
-│                 │  │      BM25 + Jaccard        │ │  │
-│                 │  │       Hybrid Scorer        │ │  │
-│                 │  └───────────────────────────┘ │  │
-│                 └───────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
-```
+
+### 1. SemanticCache (Orchestrator)
+The central component that coordinates text normalization, hash lookup (fast path), and similarity scanning (slow path).
+
+### 2. Normalizer & xxhash
+Standardizes input text (lowercase, whitespace collapse) and computes a 64-bit hash for O(1) exact match lookups.
+
+### 3. BM25 + Jaccard Hybrid Scorer
+Computes similarity between tokens. BM25 provides statistical weight to important terms, while Jaccard ensures overlap sensitivity.
+
+### 4. MetadataStore (LRU)
+A thread-safe in-memory store using a hash map for lookups and a doubly-linked list for Least Recently Used (LRU) eviction.
 
 ## Request Flow
 
-### Fast Path (exact match, ~0.1 µs)
+### Fast Path (Exact Match)
+1. **Normalize**: Clean input string.
+2. **Hash**: Generate `xxhash`.
+3. **Lookup**: Check `MetadataStore` by hash.
+4. **Return**: On hit, decompress response and return immediately (~0.1 µs).
 
-```
-GET request
-    │
-    ▼
-Normalizer.Normalize(prompt)   → "what is go"
-    │
-    ▼
-Normalizer.Hash(normalized)    → uint64 key (xxhash)
-    │
-    ▼
-MetadataStore.FindByHash(key)  → Entry found?
-    │
-   YES → Compressor.Decompress(entry.CompressedResponse)
-       → return { hit: true, exact_match: true, similarity: 1.0 }
-```
-
-### Slow Path (BM25+Jaccard similarity, ~Nµs)
-
-```
-GET request (exact miss)
-    │
-    ▼
-Tokenize(normalized)           → []string tokens
-    │
-    ▼
-MetadataStore.ScanAll()        → []Entry snapshot
-    │
-    ▼
-for each entry: Scorer.Score(queryTokens, entry.Tokens)
-    │
-    ▼
-best match within threshold?
-    ├── YES → return { hit: true, exact_match: false, similarity: X }
-    └── NO  → return { hit: false }
-```
-
-### Write Path (Set)
-
-```
-SET request { prompt, response, ttl }
-    │
-    ├── Normalizer.Normalize + Hash         → promptHash (xxhash)
-    ├── Tokenize(normalized)                → tokens ([]string)
-    ├── Compressor.Compress(prompt)         → []byte
-    ├── Compressor.Compress(response)       → []byte
-    ├── MetadataStore.Set(promptHash, Entry{Tokens, ...}, ttl)
-    └── Scorer.UpdateIDF(tokens)            → incremental state update
-```
-
-## Hybrid Scoring Algorithm
-
-Combines term importance (BM25) with word overlap (Jaccard) to achieve robust paraphrase detection without heavy models.
-
-### BM25 (Best Matching 25)
-Estimates term relevance based on Inverse Document Frequency (IDF) and Term Frequency (TF). 
-- **Rare terms** (low frequency in corpus) are weighted more heavily.
-- **Incremental IDF**: The global IDF state is updated on every `Set` and `Delete`, ensuring the scorer evolves with the cache.
-
-### Jaccard Similarity
-Measures simpler token overlap: `|A ∩ B| / |A ∪ B|`. This ensures that even if IDF is not yet representative (small corpus), identical or nearly identical word sets are detected.
-
-### Combined Metric
-`Similarity = 0.6 × BM25_normalized + 0.4 × Jaccard`
+### Slow Path (Semantic Similarity)
+1. **Miss**: If fast path misses, tokenize the normalized prompt.
+2. **Scan**: Iterate through `MetadataStore` entries.
+3. **Score**: Run hybrid scorer against candidates.
+4. **Threshold**: If highest score ≥ threshold, return hit; otherwise, return miss.
 
 ## Data Model
+
+The `Entry` struct is the primary unit of storage:
 
 ```go
 type Entry struct {
     ID                   string
-    PromptHash           uint64        // xxhash of normalised prompt
-    Tokens               []string      // normalized tokens for similarity scan
+    PromptHash           uint64        // xxhash of cleaned prompt
+    Tokens               []string      // For similarity scan
     NormalizedPrompt     string
-    CompressedPrompt     []byte        // LZ4
-    CompressedResponse   []byte        // LZ4
-    OriginalPromptSize   int
+    CompressedPrompt     []byte        // LZ4 compressed
+    CompressedResponse   []byte        // LZ4 compressed
     OriginalResponseSize int
     CreatedAt            time.Time
-    LastAccessed         time.Time
-    AccessCount          int
-    ExpiresAt            *time.Time    // nil = no expiry
 }
 ```
 
-## MetadataStore
+## Performance Scaling
 
-Thread-safe LRU cache:
-- `byHash map[uint64]*list.Element` — O(1) exact lookup
-- `lru *list.List` — eviction order (LRU tail evicted when maxSize exceeded)
-- `ScanAll() []*Entry` — O(n) snapshot for similarity scan
+The slow path latency scales linearly with cache size:
 
-## Configuration
+| Cache Size | Latency |
+|------------|---------|
+| 1K entries | ~10 µs |
+| 10K entries | ~100 µs |
+| 100K entries | ~1 ms |
 
-| Env Var | Default | Notes |
-|---------|---------|-------|
-| `HTTP_PORT` | `8080` | Listen port |
-| `CACHE_SIMILARITY_THRESHOLD` | `0.85` | Similarity threshold [0,1] |
-| `CACHE_MAX_ELEMENTS` | `100000` | LRU max entries |
-| `CACHE_DEFAULT_TTL` | `3600s` | 0 = no expiry |
-
-## Scalability Notes
-
-The similarity slow path is **O(n)** over stored entries. 
-
-| Entries | Slow path latency |
-|---------|-------------------|
-| 1,000 | ~10 µs |
-| 10,000 | ~100 µs |
-| 100,000 | ~1 ms |
-| 1,000,000 | ~10 ms |
-
-The BM25+Jaccard approach is slightly slower (~2x) than the previous SimHash implementation but significantly more accurate for paraphrase detection.
-
-For >100K entries with high slow-path traffic, consider:
-- **Banding**: Inverted indexing for top candidate selection.
-- **HNSW**: Building a vector index on the token space if latencies exceed 10ms.
+For deployments exceeding 1 million entries, we recommend sharding or introducing a vector database back-end.
