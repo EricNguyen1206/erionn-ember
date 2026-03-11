@@ -20,7 +20,9 @@ func TestSemanticCache_ExactHit(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
 
-	sc.Set(ctx, "hello world", "how are you?", 0)
+	if _, err := sc.Set(ctx, "hello world", "how are you?", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 
 	result, ok := sc.Get(ctx, "hello world", 0.85)
 	if !ok {
@@ -41,7 +43,9 @@ func TestSemanticCache_ExactMiss(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
 
-	sc.Set(ctx, "hello world", "how are you?", 0)
+	if _, err := sc.Set(ctx, "hello world", "how are you?", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 
 	_, ok := sc.Get(ctx, "hello universe", 0.85)
 	if ok {
@@ -53,7 +57,9 @@ func TestSemanticCache_NormalizeBeforeHash(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
 
-	sc.Set(ctx, "  Hello   WORLD  ", "how are you?", 0)
+	if _, err := sc.Set(ctx, "  Hello   WORLD  ", "how are you?", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 
 	// "hello world" hashes to same value as normalized "  Hello   WORLD!  "
 	result, ok := sc.Get(ctx, "hello world", 0.85)
@@ -74,7 +80,9 @@ func TestSemanticCache_SimilarityHit_SameTokens(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
 
-	sc.Set(ctx, "go language fast compiled", "Cached response.", 0)
+	if _, err := sc.Set(ctx, "go language fast compiled", "Cached response.", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 
 	// Different word order → different xxhash (exact miss) but Jaccard=1.0 (semantic hit)
 	result, ok := sc.Get(ctx, "compiled fast language go", 0.6)
@@ -97,8 +105,10 @@ func TestSemanticCache_SimilarityHit_Paraphrase(t *testing.T) {
 	// "explain goroutines in go" vs "how do goroutines work in go" share key tokens.
 	sc := newTestCache()
 	ctx := context.Background()
-	sc.Set(ctx, "explain goroutines in go", "Goroutines are lightweight threads.", 0)
-	
+	if _, err := sc.Set(ctx, "explain goroutines in go", "Goroutines are lightweight threads.", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
 	// With a single-doc corpus, partial overlap score is around 0.22.
 	// We use 0.2 as a threshold for detection in this minimal set.
 	result, ok := sc.Get(ctx, "how do goroutines work in go", 0.2)
@@ -116,7 +126,9 @@ func TestSemanticCache_SimilarityHit_Paraphrase(t *testing.T) {
 func TestSemanticCache_SimHashMiss_Unrelated(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
-	sc.Set(ctx, "weather forecast tomorrow rain", "It will rain.", 0)
+	if _, err := sc.Set(ctx, "weather forecast tomorrow rain", "It will rain.", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 	// Completely unrelated → zero token overlap → Jaccard=0, BM25=0 → miss
 	_, ok := sc.Get(ctx, "machine learning neural networks deep", 0.85)
 	if ok {
@@ -128,10 +140,14 @@ func TestSemanticCache_Stats(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
 
-	sc.Set(ctx, "one", "un", 0)
-	sc.Set(ctx, "two", "deux", 0)
+	if _, err := sc.Set(ctx, "one", "un", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	if _, err := sc.Set(ctx, "two", "deux", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 
-	sc.Get(ctx, "one", 0) // hit
+	sc.Get(ctx, "one", 0)   // hit
 	sc.Get(ctx, "three", 0) // miss
 
 	stats := sc.Stats()
@@ -156,7 +172,9 @@ func TestSemanticCache_Delete(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
 
-	sc.Set(ctx, "delete me", "done", 0)
+	if _, err := sc.Set(ctx, "delete me", "done", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 	if !sc.Delete("delete me") {
 		t.Fatal("Delete failed")
 	}
@@ -171,7 +189,9 @@ func TestSemanticCache_TTLExpiry(t *testing.T) {
 	sc := newTestCache()
 	ctx := context.Background()
 
-	sc.Set(ctx, "expire me", "bye", 50*time.Millisecond)
+	if _, err := sc.Set(ctx, "expire me", "bye", 50*time.Millisecond); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	_, ok := sc.Get(ctx, "expire me", 0)
@@ -185,7 +205,9 @@ func BenchmarkSemanticCache_Set(b *testing.B) {
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sc.Set(ctx, "how to use semantic cache in go", "You can use erion-ember.", 0)
+		if _, err := sc.Set(ctx, "how to use semantic cache in go", "You can use erion-ember.", 0); err != nil {
+			b.Fatalf("Set failed: %v", err)
+		}
 	}
 }
 
@@ -193,7 +215,9 @@ func BenchmarkSemanticCache_GetHit(b *testing.B) {
 	sc := cache.New(cache.Config{MaxElements: 1000})
 	ctx := context.Background()
 	prompt := "how to use semantic cache in go"
-	sc.Set(ctx, prompt, "You can use erion-ember.", 0)
+	if _, err := sc.Set(ctx, prompt, "You can use erion-ember.", 0); err != nil {
+		b.Fatalf("Set failed: %v", err)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = sc.Get(ctx, prompt, 0.85)
@@ -203,7 +227,9 @@ func BenchmarkSemanticCache_GetHit(b *testing.B) {
 func BenchmarkSemanticCache_GetMiss(b *testing.B) {
 	sc := cache.New(cache.Config{MaxElements: 1000})
 	ctx := context.Background()
-	sc.Set(ctx, "something else", "response", 0)
+	if _, err := sc.Set(ctx, "something else", "response", 0); err != nil {
+		b.Fatalf("Set failed: %v", err)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = sc.Get(ctx, "how to use semantic cache in go", 0.85)

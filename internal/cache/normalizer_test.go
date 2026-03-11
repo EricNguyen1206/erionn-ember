@@ -25,7 +25,9 @@ func TestNormalize(t *testing.T) {
 
 func TestHashConsistency(t *testing.T) {
 	n := cache.NewNormalizer()
-	if n.Hash("hello") != n.Hash("hello") {
+	first := n.Hash("hello")
+	second := n.Hash("hello")
+	if first != second {
 		t.Error("hash must be deterministic")
 	}
 }
