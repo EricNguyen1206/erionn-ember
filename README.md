@@ -16,8 +16,8 @@ High-performance semantic cache service for LLM applications. Deployable as a st
 
 ### From Source
 ```bash
-git clone https://github.com/EricNguyen1206/erion-ember
-cd erion-ember
+git clone https://github.com/EricNguyen1206/erionn-ember
+cd erionn-ember
 make build
 ```
 

@@ -1,6 +1,6 @@
 {
   "name": "ember-client",
-  "version": "0.1.0",
+  "version": "3.0.0",
   "description": "Official Node.js SDK for Ember - High-performance semantic cache service for LLM applications",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,7 +13,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/EricNguyen1206/erion-ember.git"
+    "url": "git+https://github.com/EricNguyen1206/erionn-ember.git"
   },
   "keywords": [
     "ember",
@@ -25,9 +25,9 @@
   "author": "Eric Nguyen <ericnguyen120601@gmail.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/EricNguyen1206/erion-ember/issues"
+    "url": "https://github.com/EricNguyen1206/erionn-ember/issues"
   },
-  "homepage": "https://github.com/EricNguyen1206/erion-ember#readme",
+  "homepage": "https://github.com/EricNguyen1206/erionn-ember#readme",
   "devDependencies": {
     "@types/jest": "^29.5.11",
     "@types/node": "^20.10.0",

@@ -13,8 +13,8 @@ Welcome! We're glad you're interested in contributing to Erion Ember. These guid
 
 ### Step 1: Clone and Build
 ```bash
-git clone https://github.com/EricNguyen1206/erion-ember
-cd erion-ember
+git clone https://github.com/EricNguyen1206/erionn-ember
+cd erionn-ember
 make build
 ```
 

@@ -14,12 +14,14 @@ import (
 	"github.com/EricNguyen1206/erion-ember/internal/server"
 )
 
+const Version = "3.0.0"
+
 func main() {
 	cfg := loadConfig()
 	httpAddr := ":" + getEnv("HTTP_PORT", "8080")
 
 	slog.Info("starting erion-ember",
-		"version", "3.0.0",
+		"version", Version,
 		"addr", httpAddr,
 		"similarity_threshold", cfg.SimilarityThreshold,
 		"max_elements", cfg.MaxElements,

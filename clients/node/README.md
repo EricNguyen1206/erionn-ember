@@ -1,6 +1,6 @@
 # Ember Node.js Client
 
-The official Node.js SDK for [Ember](https://github.com/EricNguyen1206/erion-ember) - High-performance semantic cache service for LLM applications.
+The official Node.js SDK for [Ember](https://github.com/EricNguyen1206/erionn-ember) - High-performance semantic cache service for LLM applications.
 
 ## Installation
 
@@ -12,7 +12,9 @@ npm install ember-client
 yarn add ember-client
 ```
 
-*(Note: Package name could be published as `ember-client`, or `@erion/ember` depending on availability on NPM).*
+This release publishes the package as `ember-client`.
+
+Version `3.0.0` is the intentional major release that aligns the Node client metadata with the server v3 release.
 
 ## Quick Start
 TypeScript / ES Modules:
