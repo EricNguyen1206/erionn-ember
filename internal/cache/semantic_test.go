@@ -200,6 +200,47 @@ func TestSemanticCache_TTLExpiry(t *testing.T) {
 	}
 }
 
+func TestSemanticCache_StatsExcludeExpiredEntries(t *testing.T) {
+	sc := newTestCache()
+	ctx := context.Background()
+
+	if _, err := sc.Set(ctx, "expire soon", "bye", 50*time.Millisecond); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	stats := sc.Stats()
+	if stats.TotalEntries != 0 {
+		t.Fatalf("got %d entries, want 0 after expiry", stats.TotalEntries)
+	}
+}
+
+func TestSemanticCache_SetReplacesExistingPrompt(t *testing.T) {
+	sc := newTestCache()
+	ctx := context.Background()
+
+	if _, err := sc.Set(ctx, "hello world", "first", 0); err != nil {
+		t.Fatalf("first Set failed: %v", err)
+	}
+	if _, err := sc.Set(ctx, "hello world", "second", 0); err != nil {
+		t.Fatalf("second Set failed: %v", err)
+	}
+
+	result, ok := sc.Get(ctx, "hello world", 0)
+	if !ok {
+		t.Fatal("expected hit, got miss")
+	}
+	if result.Response != "second" {
+		t.Fatalf("got response %q, want %q", result.Response, "second")
+	}
+
+	stats := sc.Stats()
+	if stats.TotalEntries != 1 {
+		t.Fatalf("got %d entries, want 1", stats.TotalEntries)
+	}
+}
+
 func BenchmarkSemanticCache_Set(b *testing.B) {
 	sc := cache.New(cache.Config{MaxElements: 1000})
 	ctx := context.Background()

@@ -11,7 +11,7 @@ const (
 	// BM25 parameters
 	bm25K1 = 1.2  // Controls term frequency saturation
 	bm25B  = 0.75 // Controls document length normalization
-	
+
 	// Hybrid scoring weights
 	weightBM25    = 0.6 // Weight for BM25 in combined score
 	weightJaccard = 0.4 // Weight for Jaccard in combined score
@@ -38,11 +38,11 @@ func (s *Scorer) UpdateIDF(tokens []string) {
 	defer s.mu.Unlock()
 	s.n++
 	s.sumDL += len(tokens)
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{}, len(tokens))
 	for _, t := range tokens {
-		if !seen[t] {
+		if _, ok := seen[t]; !ok {
 			s.df[t]++
-			seen[t] = true
+			seen[t] = struct{}{}
 		}
 	}
 }
@@ -57,14 +57,14 @@ func (s *Scorer) RemoveDoc(tokens []string) {
 	}
 	s.n--
 	s.sumDL -= len(tokens)
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{}, len(tokens))
 	for _, t := range tokens {
-		if !seen[t] {
+		if _, ok := seen[t]; !ok {
 			s.df[t]--
 			if s.df[t] <= 0 {
 				delete(s.df, t)
 			}
-			seen[t] = true
+			seen[t] = struct{}{}
 		}
 	}
 }
@@ -101,18 +101,18 @@ func (s *Scorer) BM25(query, doc []string) float32 {
 	var totalScore float64
 	for _, queryToken := range query {
 		df := docFreqs[queryToken]
-		
+
 		// Standard BM25 IDF variant
 		idf := math.Log((float64(totalDocs-df)+0.5)/(float64(df)+0.5) + 1.0)
 		if idf < 0 {
 			idf = 0
 		}
-		
+
 		tf := float64(termFreqs[queryToken])
 		if tf == 0 {
 			continue // Term not in document
 		}
-		
+
 		// BM25 main formula: IDF * (f(t,D) * (k1 + 1)) / (f(t,D) + k1 * (1 - b + b * |D|/avgdl))
 		numerator := tf * (bm25K1 + 1)
 		denominator := tf + bm25K1*(1-bm25B+bm25B*docLen/avgdl)
@@ -162,7 +162,7 @@ func (s *Scorer) Jaccard(a, b []string) float32 {
 
 	var inter int
 	for t := range setA {
-		if setB[t] {
+		if _, ok := setB[t]; ok {
 			inter++
 		}
 	}
@@ -173,10 +173,10 @@ func (s *Scorer) Jaccard(a, b []string) float32 {
 	return float32(inter) / float32(union)
 }
 
-func toSet(tokens []string) map[string]bool {
-	m := make(map[string]bool, len(tokens))
+func toSet(tokens []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(tokens))
 	for _, t := range tokens {
-		m[t] = true
+		m[t] = struct{}{}
 	}
 	return m
 }

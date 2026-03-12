@@ -30,10 +30,9 @@ make test-race
 
 ## Repository Structure
 
-- `cmd/server/`: The entry point for the HTTP service.
+- `cmd/server/`: The entry point for the HTTP and gRPC services.
 - `internal/cache/`: Core caching logic, scoring algorithms, and storage.
-- `internal/server/`: HTTP handler implementation.
-- `proto/`: Protobuf definitions (for future gRPC support).
+- `internal/server/`: HTTP and gRPC handler implementation.
 
 ## Development Workflow
 

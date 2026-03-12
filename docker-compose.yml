@@ -4,10 +4,12 @@ services:
     build: .
     ports:
       - "8080:8080"
+      - "9090:9090"
     environment:
       - HTTP_PORT=8080
+      - GRPC_PORT=9090
       - CACHE_MAX_ELEMENTS=100000
       - CACHE_DEFAULT_TTL=3600
-      # SimHash threshold: 0.85 → max 9 differing bits out of 64
+      # Default semantic similarity threshold.
       - CACHE_SIMILARITY_THRESHOLD=0.85
     restart: unless-stopped

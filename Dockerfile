@@ -14,5 +14,5 @@ RUN apk add --no-cache ca-certificates
 
 COPY --from=builder /bin/erion-ember /bin/erion-ember
 
-EXPOSE 8080
+EXPOSE 8080 9090
 ENTRYPOINT ["/bin/erion-ember"]

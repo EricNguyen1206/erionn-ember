@@ -1,4 +1,4 @@
-.PHONY: build test clean run
+.PHONY: build test clean run lint test-verbose test-race
 
 BIN := bin/erion-ember
 
@@ -25,18 +25,6 @@ run: build
 ## clean: remove build artifacts
 clean:
 	rm -rf bin/
-
-## generate: regenerate protobuf code (requires protoc + plugins)
-## Install: brew install protoc-gen-go protoc-gen-go-grpc
-##          go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
-generate:
-	mkdir -p gen/ember/v1
-	protoc -I proto \
-		-I third_party/googleapis \
-		--go_out=gen --go_opt=paths=source_relative \
-		--go-grpc_out=gen --go-grpc_opt=paths=source_relative \
-		--grpc-gateway_out=gen --grpc-gateway_opt=paths=source_relative \
-		proto/ember/v1/cache.proto
 
 ## lint: run golangci-lint
 lint:

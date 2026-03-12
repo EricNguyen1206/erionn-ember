@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,39 +16,85 @@ import (
 	"github.com/EricNguyen1206/erion-ember/internal/server"
 )
 
+const shutdownTimeout = 5 * time.Second
+
 func main() {
+	if err := run(); err != nil {
+		slog.Error("server exited", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg := loadConfig()
 	httpAddr := ":" + getEnv("HTTP_PORT", "8080")
+	grpcAddr := ":" + getEnv("GRPC_PORT", "9090")
 
 	slog.Info("starting erion-ember",
 		"version", "3.0.0",
-		"addr", httpAddr,
+		"http_addr", httpAddr,
+		"grpc_addr", grpcAddr,
 		"similarity_threshold", cfg.SimilarityThreshold,
 		"max_elements", cfg.MaxElements,
 		"engine", "bm25-jaccard",
 	)
 
 	sc := cache.New(cfg)
-
-	srv := server.NewHTTPServer(httpAddr, sc)
+	httpSrv := server.NewHTTPServer(httpAddr, sc)
+	grpcSrv, err := server.NewGRPCServer(grpcAddr, sc)
+	if err != nil {
+		return fmt.Errorf("create gRPC server: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	errCh := make(chan error, 2)
+
 	go func() {
 		slog.Info("HTTP server ready", "addr", httpAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("HTTP server error", "err", err)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("http server: %w", err)
 		}
 	}()
 
-	<-ctx.Done()
-	slog.Info("shutting down gracefully...")
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutCtx); err != nil {
-		slog.Error("shutdown error", "err", err)
+	go func() {
+		slog.Info("gRPC server ready", "addr", grpcSrv.Addr().String())
+		if err := grpcSrv.Serve(); err != nil {
+			errCh <- fmt.Errorf("grpc server: %w", err)
+		}
+	}()
+
+	var serveErr error
+	select {
+	case <-ctx.Done():
+		slog.Info("shutting down gracefully...")
+	case serveErr = <-errCh:
+		stop()
+		slog.Error("runtime server error", "err", serveErr)
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	grpcStopped := make(chan struct{})
+	go func() {
+		grpcSrv.GracefulStop()
+		close(grpcStopped)
+	}()
+
+	select {
+	case <-grpcStopped:
+	case <-shutdownCtx.Done():
+		grpcSrv.Stop()
+	}
+
+	var shutdownErr error
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		shutdownErr = fmt.Errorf("shutdown http server: %w", err)
+	}
+
+	return errors.Join(serveErr, shutdownErr)
 }
 
 func loadConfig() cache.Config {

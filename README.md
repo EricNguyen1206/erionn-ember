@@ -2,7 +2,7 @@
 
 ![Erion Ember Logo](assets/logo-horizontal.svg)
 
-High-performance semantic cache service for LLM applications. Deployable as a standalone binary — like Redis, but for LLM responses. Erion Ember acts as a persistent, radiant "ember" for your intelligence layer, providing micro-second speed and semantic awareness.
+High-performance semantic cache service for LLM applications. Deployable as a standalone binary - like Redis, but for LLM responses. Erion Ember acts as a persistent, radiant "ember" for your intelligence layer, providing micro-second speed and semantic awareness.
 
 ## Features
 
@@ -10,7 +10,8 @@ High-performance semantic cache service for LLM applications. Deployable as a st
 - **Zero Dependencies**: No model files, no vector databases, no CGO, and no Python required.
 - **Efficient Storage**: Transparent LZ4 compression of all cached data.
 - **Thread-Safe**: Built in Go with high-concurrency memory management.
-- **Developer Friendly**: Simple REST/JSON API for easy integration.
+- **Dual Protocols**: Native HTTP/JSON and gRPC servers backed by the same cache engine.
+- **No Bundled SDKs**: The repository only ships the core server implementation and handlers.
 
 ## Installation
 
@@ -70,6 +71,7 @@ Settings can be tuned via `.env` or environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HTTP_PORT` | `8080` | Server listen port |
+| `GRPC_PORT` | `9090` | gRPC listen port |
 | `CACHE_SIMILARITY_THRESHOLD` | `0.85` | Default similarity threshold (0.0–1.0) |
 | `CACHE_MAX_ELEMENTS` | `100000` | LRU capacity limit |
 | `CACHE_DEFAULT_TTL` | `3600` | Default record TTL (seconds) |

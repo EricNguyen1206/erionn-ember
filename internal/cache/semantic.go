@@ -2,9 +2,15 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
+)
+
+var (
+	ErrEmptyPrompt   = errors.New("prompt is required")
+	ErrEmptyResponse = errors.New("response is required")
 )
 
 // Config holds SemanticCache configuration.
@@ -42,8 +48,8 @@ type Stats struct {
 
 // SemanticCache orchestrates prompt-based caching with semantic similarity matching.
 //
-//	Fast path  → xxhash exact lookup       (~0µs)
-//	Slow path  → BM25+Jaccard token scan   (~N µs, O(n) over stored entries)
+//	Fast path  -> xxhash exact lookup       (~0us)
+//	Slow path  -> BM25+Jaccard token scan   (~N us, O(n) over stored entries)
 //
 // Zero dependencies: no model files, no CGO, no external services.
 type SemanticCache struct {
@@ -79,8 +85,8 @@ func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32)
 	normalized := c.normalizer.Normalize(prompt)
 	hash := c.normalizer.Hash(normalized)
 
-	// ── Fast path: exact xxhash match ────────────────────────────────────
-	if entry := c.store.FindByHash(hash); entry != nil {
+	// Fast path: exact xxhash match.
+	if entry, expired := c.store.FindByHashWithExpired(hash); entry != nil {
 		response, err := c.compressor.Decompress(entry.CompressedResponse, entry.OriginalResponseSize)
 		if err == nil {
 			c.hits.Add(1)
@@ -91,11 +97,19 @@ func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32)
 				CachedAt:   entry.CreatedAt,
 			}, true
 		}
+	} else {
+		c.removeEntryTokens(expired)
 	}
 
-	// ── Slow path: BM25 + Jaccard similarity scan ─────────────────────────
 	queryTokens := Tokenize(normalized)
-	allEntries := c.store.ScanAll()
+	if len(queryTokens) == 0 {
+		c.misses.Add(1)
+		return nil, false
+	}
+
+	// Slow path: BM25 + Jaccard similarity scan.
+	allEntries, expiredEntries := c.store.ScanAllLive()
+	c.removeEntriesTokens(expiredEntries)
 
 	var bestEntry *Entry
 	var bestScore float32
@@ -109,8 +123,8 @@ func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32)
 	}
 
 	if bestEntry != nil && bestScore >= threshold {
-		// Re-fetch to ensure we have the latest version (though scanAll gives pointers)
-		if entry := c.store.FindByHash(bestEntry.PromptHash); entry != nil {
+		// Re-fetch to refresh LRU metadata and ensure the entry still exists.
+		if entry, expired := c.store.FindByHashWithExpired(bestEntry.PromptHash); entry != nil {
 			response, err := c.compressor.Decompress(entry.CompressedResponse, entry.OriginalResponseSize)
 			if err == nil {
 				c.hits.Add(1)
@@ -121,6 +135,8 @@ func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32)
 					CachedAt:   entry.CreatedAt,
 				}, true
 			}
+		} else {
+			c.removeEntryTokens(expired)
 		}
 	}
 
@@ -130,9 +146,16 @@ func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32)
 
 // Set stores a prompt + response in the cache.
 func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time.Duration) (string, error) {
+	if prompt == "" {
+		return "", ErrEmptyPrompt
+	}
+	if response == "" {
+		return "", ErrEmptyResponse
+	}
 	if ttl == 0 {
 		ttl = c.cfg.DefaultTTL
 	}
+
 	normalized := c.normalizer.Normalize(prompt)
 	hash := c.normalizer.Hash(normalized)
 	tokens := Tokenize(normalized)
@@ -142,7 +165,6 @@ func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time
 
 	id := fmt.Sprintf("%d", c.nextID.Add(1))
 	now := time.Now()
-	
 	entry := &Entry{
 		ID:                   id,
 		PromptHash:           hash,
@@ -155,10 +177,12 @@ func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time
 		CreatedAt:            now,
 		LastAccessed:         now,
 	}
-	
-	c.store.Set(hash, entry, ttl)
+
+	replaced, evicted := c.store.Set(hash, entry, ttl)
+	c.removeEntryTokens(replaced)
+	c.removeEntryTokens(evicted)
 	c.scorer.UpdateIDF(tokens)
-	
+
 	return id, nil
 }
 
@@ -166,25 +190,26 @@ func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time
 func (c *SemanticCache) Delete(prompt string) bool {
 	normalized := c.normalizer.Normalize(prompt)
 	hash := c.normalizer.Hash(normalized)
-	
-	if entry := c.store.FindByHash(hash); entry != nil {
-		c.scorer.RemoveDoc(entry.Tokens)
+	entry, deleted := c.store.DeleteEntry(hash)
+	if deleted {
+		c.removeEntryTokens(entry)
 	}
-	return c.store.Delete(hash)
+	return deleted
 }
 
 // Stats returns current cache statistics.
 func (c *SemanticCache) Stats() Stats {
 	total := c.total.Load()
 	hits := c.hits.Load()
-	
+
 	var hitRate float64
 	if total > 0 {
 		hitRate = float64(hits) / float64(total)
 	}
-	
-	entries, _ := c.store.Stats()
-	
+
+	entries, _, expired := c.store.StatsLive()
+	c.removeEntriesTokens(expired)
+
 	return Stats{
 		TotalEntries: entries,
 		CacheHits:    hits,
@@ -192,4 +217,17 @@ func (c *SemanticCache) Stats() Stats {
 		TotalQueries: total,
 		HitRate:      hitRate,
 	}
+}
+
+func (c *SemanticCache) removeEntriesTokens(entries []*Entry) {
+	for _, entry := range entries {
+		c.removeEntryTokens(entry)
+	}
+}
+
+func (c *SemanticCache) removeEntryTokens(entry *Entry) {
+	if entry == nil || len(entry.Tokens) == 0 {
+		return
+	}
+	c.scorer.RemoveDoc(entry.Tokens)
 }

@@ -3,51 +3,77 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/EricNguyen1206/erion-ember/internal/cache"
 )
 
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 15 * time.Second
+	httpWriteTimeout      = 15 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+)
+
 // HTTPServer exposes SemanticCache over REST/JSON.
 type HTTPServer struct {
-	cache  *cache.SemanticCache
 	server *http.Server
 }
 
+type httpHandler struct {
+	cache *cache.SemanticCache
+}
+
 func NewHTTPServer(addr string, sc *cache.SemanticCache) *HTTPServer {
-	s := &HTTPServer{cache: sc}
+	return &HTTPServer{
+		server: &http.Server{
+			Addr:              addr,
+			Handler:           NewHTTPHandler(sc),
+			ReadHeaderTimeout: httpReadHeaderTimeout,
+			ReadTimeout:       httpReadTimeout,
+			WriteTimeout:      httpWriteTimeout,
+			IdleTimeout:       httpIdleTimeout,
+		},
+	}
+}
+
+func NewHTTPHandler(sc *cache.SemanticCache) http.Handler {
+	h := &httpHandler{cache: sc}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/cache/get", s.handleGet)
-	mux.HandleFunc("POST /v1/cache/set", s.handleSet)
-	mux.HandleFunc("POST /v1/cache/delete", s.handleDelete)
-	mux.HandleFunc("GET /v1/stats", s.handleStats)
-	mux.HandleFunc("GET /health", s.handleHealth)
-	s.server = &http.Server{Addr: addr, Handler: mux}
-	return s
+	mux.HandleFunc("POST /v1/cache/get", h.handleGet)
+	mux.HandleFunc("POST /v1/cache/set", h.handleSet)
+	mux.HandleFunc("POST /v1/cache/delete", h.handleDelete)
+	mux.HandleFunc("GET /v1/stats", h.handleStats)
+	mux.HandleFunc("GET /health", h.handleHealth)
+	return mux
 }
 
 func (s *HTTPServer) ListenAndServe() error              { return s.server.ListenAndServe() }
 func (s *HTTPServer) Shutdown(ctx context.Context) error { return s.server.Shutdown(ctx) }
 
-// ─── Request / Response types ────────────────────────────────────────────────
-
 type getReq struct {
 	Prompt              string  `json:"prompt"`
 	SimilarityThreshold float32 `json:"similarity_threshold,omitempty"`
 }
+
 type getResp struct {
 	Hit        bool    `json:"hit"`
 	Response   string  `json:"response,omitempty"`
 	Similarity float32 `json:"similarity"`
 	ExactMatch bool    `json:"exact_match"`
 }
+
 type setReq struct {
 	Prompt   string `json:"prompt"`
 	Response string `json:"response"`
-	TTL      int    `json:"ttl,omitempty"` // seconds, 0 = default
+	TTL      int    `json:"ttl,omitempty"`
 }
+
 type setResp struct {
 	ID string `json:"id"`
 }
@@ -55,6 +81,7 @@ type setResp struct {
 type deleteReq struct {
 	Prompt string `json:"prompt"`
 }
+
 type deleteResp struct {
 	Deleted bool `json:"deleted"`
 }
@@ -67,50 +94,57 @@ type statsResp struct {
 	HitRate      float64 `json:"hit_rate"`
 }
 
-// ─── Handlers ─────────────────────────────────────────────────────────────────
-
-func (s *HTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
+func (h *httpHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	var req getReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Prompt == "" {
+	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
-	result, hit := s.cache.Get(r.Context(), req.Prompt, req.SimilarityThreshold)
+
+	result, hit := h.cache.Get(r.Context(), req.Prompt, req.SimilarityThreshold)
 	resp := getResp{Hit: hit}
 	if hit && result != nil {
 		resp.Response = result.Response
 		resp.Similarity = result.Similarity
 		resp.ExactMatch = result.ExactMatch
 	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *HTTPServer) handleSet(w http.ResponseWriter, r *http.Request) {
+func (h *httpHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	var req setReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Prompt == "" || req.Response == "" {
+	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) || !hasText(req.Response) {
 		http.Error(w, "prompt and response are required", http.StatusBadRequest)
 		return
 	}
-	id, err := s.cache.Set(r.Context(), req.Prompt, req.Response, time.Duration(req.TTL)*time.Second)
+	if req.TTL < 0 {
+		http.Error(w, "ttl must be non-negative", http.StatusBadRequest)
+		return
+	}
+
+	id, err := h.cache.Set(r.Context(), req.Prompt, req.Response, time.Duration(req.TTL)*time.Second)
 	if err != nil {
 		slog.Error("cache.Set failed", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
 	writeJSON(w, http.StatusOK, setResp{ID: id})
 }
 
-func (s *HTTPServer) handleDelete(w http.ResponseWriter, r *http.Request) {
+func (h *httpHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	var req deleteReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) {
+		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, deleteResp{Deleted: s.cache.Delete(req.Prompt)})
+
+	writeJSON(w, http.StatusOK, deleteResp{Deleted: h.cache.Delete(req.Prompt)})
 }
 
-func (s *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
-	st := s.cache.Stats()
+func (h *httpHandler) handleStats(w http.ResponseWriter, r *http.Request) {
+	st := h.cache.Stats()
 	writeJSON(w, http.StatusOK, statsResp{
 		TotalEntries: int64(st.TotalEntries),
 		CacheHits:    st.CacheHits,
@@ -120,8 +154,31 @@ func (s *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (h *httpHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func decodeJSON(r *http.Request, dst any) error {
+	defer r.Body.Close()
+
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+
+	if err := dec.Decode(new(struct{})); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+
+	return errors.New("request body must contain a single JSON object")
+}
+
+func hasText(value string) bool {
+	return strings.TrimSpace(value) != ""
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
