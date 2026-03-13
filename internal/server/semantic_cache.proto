@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package ember.v1;
+
+option go_package = "github.com/EricNguyen1206/erion-ember/internal/server;server";
+
+service SemanticCacheService {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Set(SetRequest) returns (SetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message GetRequest {
+  string prompt = 1;
+  float similarity_threshold = 2;
+}
+
+message GetResponse {
+  bool hit = 1;
+  string response = 2;
+  float similarity = 3;
+  bool exact_match = 4;
+}
+
+message SetRequest {
+  string prompt = 1;
+  string response = 2;
+  int64 ttl_seconds = 3;
+}
+
+message SetResponse {
+  string id = 1;
+}
+
+message DeleteRequest {
+  string prompt = 1;
+}
+
+message DeleteResponse {
+  bool deleted = 1;
+}
+
+message StatsRequest {}
+
+message StatsResponse {
+  int64 total_entries = 1;
+  int64 cache_hits = 2;
+  int64 cache_misses = 3;
+  int64 total_queries = 4;
+  double hit_rate = 5;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}

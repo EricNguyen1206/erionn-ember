@@ -103,16 +103,15 @@ func newBufconnClient(t *testing.T) (SemanticCacheServiceClient, func()) {
 		return listener.Dial()
 	}
 
-	conn, err := grpc.DialContext(
-		context.Background(),
-		"bufnet",
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
 		listener.Close()
 		grpcServer.Stop()
-		t.Fatalf("DialContext: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 
 	cleanup := func() {
