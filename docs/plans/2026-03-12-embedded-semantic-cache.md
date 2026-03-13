@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add namespace-aware gRPC tests that define the target contract
+## Task 1: Add namespace-aware gRPC tests that define the target contract
 
 **Files:**
 - Modify: `internal/server/grpc_test.go`
@@ -59,7 +59,7 @@ git add internal/server/grpc_test.go
 git commit -m "test: define namespace-aware grpc contract"
 ```
 
-### Task 2: Create the proto-first gRPC contract and generation hooks
+## Task 2: Create the proto-first gRPC contract and generation hooks
 
 **Files:**
 - Create: `proto/ember/v1/semantic_cache.proto`
@@ -110,7 +110,7 @@ git add Makefile proto/ember/v1/semantic_cache.proto internal/gen/ember/v1/seman
 git commit -m "build: add generated protobuf contract"
 ```
 
-### Task 3: Replace the handwritten gRPC transport with generated protobuf types
+## Task 3: Replace the handwritten gRPC transport with generated protobuf types
 
 **Files:**
 - Modify: `internal/server/grpc.go`
@@ -150,7 +150,7 @@ git add internal/server/grpc.go internal/server/grpc_test.go
 git commit -m "refactor: switch grpc server to generated protobuf types"
 ```
 
-### Task 4: Add namespace resolution and embedder abstractions in the cache layer
+## Task 4: Add namespace resolution and embedder abstractions in the cache layer
 
 **Files:**
 - Create: `internal/cache/namespace.go`
@@ -205,7 +205,7 @@ git add internal/cache/namespace.go internal/cache/embedder.go internal/cache/na
 git commit -m "feat: add namespace and embedder abstractions"
 ```
 
-### Task 5: Extend entry storage for namespace-aware exact lookup and vector-bearing entries
+## Task 5: Extend entry storage for namespace-aware exact lookup and vector-bearing entries
 
 **Files:**
 - Modify: `internal/cache/metadata.go`
@@ -255,7 +255,7 @@ git add internal/cache/metadata.go internal/cache/metadata_test.go
 git commit -m "feat: add namespace-aware entry storage"
 ```
 
-### Task 6: Add a pluggable vector index with a flat-search baseline
+## Task 6: Add a pluggable vector index with a flat-search baseline
 
 **Files:**
 - Create: `internal/cache/vector_index.go`
@@ -305,12 +305,14 @@ git add internal/cache/vector_index.go internal/cache/flat_index.go internal/cac
 git commit -m "feat: add pluggable vector index baseline"
 ```
 
-### Task 7: Replace BM25 retrieval with exact-hash plus vector search in the cache engine
+## Task 7: Replace BM25 retrieval with exact-hash plus vector search in the cache engine
 
 **Files:**
 - Modify: `internal/cache/semantic.go`
 - Modify: `internal/cache/semantic_test.go`
 - Modify: `internal/cache/scorer.go`
+
+**Contract note:** `Get` should return `(*GetResult, error)`. A semantic or exact hit returns a populated result and `nil` error. A cache miss returns `nil, nil`. An embedding or index failure during `Get` returns `nil, err` so transports can map infrastructure failures explicitly instead of collapsing them into misses.
 
 **Step 1: Write the failing semantic behavior test**
 
@@ -325,11 +327,14 @@ func TestSemanticCacheDoesNotCrossNamespaces(t *testing.T) {
 		Response:  "go is a language",
 	})
 
-	_, hit := sc.Get(ctx, cache.GetInput{
+	result, err := sc.Get(ctx, cache.GetInput{
 		Namespace: cache.Namespace{Model: "m1", TenantID: "b", SystemPromptHash: "sys"},
 		Prompt:    "tell me about golang",
 	})
-	if hit {
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if result != nil {
 		t.Fatal("expected miss across namespaces")
 	}
 }
@@ -347,7 +352,8 @@ Expected: FAIL until the cache engine uses namespaces, embeddings, and vector se
 // 1. exact lookup by namespace + normalized prompt hash
 // 2. embed query
 // 3. search vector index within namespace
-// 4. apply threshold and return best hit
+// 4. apply threshold and return best hit as (*GetResult, nil)
+// 5. return (nil, nil) on miss and (nil, err) on embedding/index failure
 ```
 
 **Step 4: Re-run the focused semantic tests**
@@ -362,7 +368,7 @@ git add internal/cache/semantic.go internal/cache/semantic_test.go internal/cach
 git commit -m "feat: switch cache engine to embedding retrieval"
 ```
 
-### Task 8: Wire the embedded CPU model runtime and startup configuration
+## Task 8: Wire the embedded CPU model runtime and startup configuration
 
 **Files:**
 - Create: `internal/cache/onnx_embedder.go`
@@ -405,7 +411,7 @@ git add cmd/server/main.go internal/cache/onnx_embedder.go internal/cache/onnx_e
 git commit -m "feat: wire embedded cpu embedding runtime"
 ```
 
-### Task 9: Update HTTP compatibility, stats, and documentation
+## Task 9: Update HTTP compatibility, stats, and documentation
 
 **Files:**
 - Modify: `internal/server/http.go`
@@ -449,7 +455,7 @@ git add internal/server/http.go internal/server/http_test.go README.md docs/API_
 git commit -m "docs: align http compatibility and semantic cache docs"
 ```
 
-### Task 10: Add benchmarks, full-suite validation, and final cleanup
+## Task 10: Add benchmarks, full-suite validation, and final cleanup
 
 **Files:**
 - Modify: `internal/cache/semantic_test.go`
@@ -474,7 +480,10 @@ Expected: PASS and emit baseline benchmark numbers.
 Run: `gofmt -w cmd/server/main.go internal/cache/*.go internal/server/*.go`
 Run: `go test ./...`
 Run: `golangci-lint run ./...`
-Expected: all commands pass; if `golangci-lint` is unavailable, record that explicitly.
+Known baseline failures before this plan starts:
+- `go test -race ./...` crashes with `checkptr: misaligned pointer conversion` in the handwritten gRPC layer.
+- `golangci-lint run ./...` reports staticcheck deprecations in `internal/server/grpc.go` and `internal/server/grpc_test.go`.
+Expected: new work should not introduce additional failures; once the gRPC transport is migrated, all commands should pass. If `golangci-lint` is unavailable, record that explicitly.
 
 **Step 4: Update final docs or defaults discovered during validation**
 

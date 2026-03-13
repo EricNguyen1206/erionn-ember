@@ -25,7 +25,7 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 - If any of those files are added later, merge their instructions into this file and resolve conflicts explicitly.
 
 ## Source of Truth
-- Trust the Go code first, then `README.md`, `CONTRIBUTING.md`, `Makefile`, and `.github/workflows/docker-publish.yml`.
+- Trust the Go code first, then `README.md`, `CONTRIBUTING.md`, `Makefile`, and `.github/workflows/docker-publish.yml` on GitHub.
 - Keep the repository focused on the cache server; do not reintroduce client SDKs or unrelated platform code.
 - Keep `cmd/server` thin and place domain logic under `internal/cache` or `internal/server`.
 
