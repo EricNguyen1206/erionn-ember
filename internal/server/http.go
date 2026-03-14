@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/EricNguyen1206/erion-ember/internal/cache"
@@ -18,6 +22,7 @@ const (
 	httpReadTimeout       = 15 * time.Second
 	httpWriteTimeout      = 15 * time.Second
 	httpIdleTimeout       = 60 * time.Second
+	maxRequestBodyBytes   = 8 << 20
 )
 
 // HTTPServer exposes SemanticCache over REST/JSON.
@@ -27,6 +32,32 @@ type HTTPServer struct {
 
 type httpHandler struct {
 	cache *cache.SemanticCache
+	stats *httpMetrics
+}
+
+type httpMetrics struct {
+	mu       sync.Mutex
+	requests map[requestMetricKey]*requestMetric
+}
+
+type requestMetricKey struct {
+	Method string
+	Path   string
+	Status int
+}
+
+type requestMetric struct {
+	Count       int64
+	DurationSum time.Duration
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (h *httpHandler) ready() bool {
+	return h != nil && h.cache != nil
 }
 
 func NewHTTPServer(addr string, sc *cache.SemanticCache) *HTTPServer {
@@ -43,14 +74,16 @@ func NewHTTPServer(addr string, sc *cache.SemanticCache) *HTTPServer {
 }
 
 func NewHTTPHandler(sc *cache.SemanticCache) http.Handler {
-	h := &httpHandler{cache: sc}
+	h := &httpHandler{cache: sc, stats: newHTTPMetrics()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/cache/get", h.handleGet)
 	mux.HandleFunc("POST /v1/cache/set", h.handleSet)
 	mux.HandleFunc("POST /v1/cache/delete", h.handleDelete)
 	mux.HandleFunc("GET /v1/stats", h.handleStats)
+	mux.HandleFunc("GET /metrics", h.handleMetrics)
 	mux.HandleFunc("GET /health", h.handleHealth)
-	return mux
+	mux.HandleFunc("GET /ready", h.handleReady)
+	return h.withObservability(mux)
 }
 
 func (s *HTTPServer) ListenAndServe() error              { return s.server.ListenAndServe() }
@@ -95,8 +128,17 @@ type statsResp struct {
 }
 
 func (h *httpHandler) handleGet(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+
 	var req getReq
-	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) {
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeDecodeError(w, err, "prompt is required")
+		return
+	}
+	if !hasText(req.Prompt) {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
@@ -113,8 +155,17 @@ func (h *httpHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandler) handleSet(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+
 	var req setReq
-	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) || !hasText(req.Response) {
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeDecodeError(w, err, "prompt and response are required")
+		return
+	}
+	if !hasText(req.Prompt) || !hasText(req.Response) {
 		http.Error(w, "prompt and response are required", http.StatusBadRequest)
 		return
 	}
@@ -134,8 +185,17 @@ func (h *httpHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+
 	var req deleteReq
-	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) {
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeDecodeError(w, err, "prompt is required")
+		return
+	}
+	if !hasText(req.Prompt) {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
@@ -144,6 +204,11 @@ func (h *httpHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandler) handleStats(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+
 	st := h.cache.Stats()
 	writeJSON(w, http.StatusOK, statsResp{
 		TotalEntries: int64(st.TotalEntries),
@@ -154,12 +219,42 @@ func (h *httpHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *httpHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.WriteHeader(http.StatusOK)
+
+	if h.stats != nil {
+		_, _ = io.WriteString(w, h.stats.render())
+	}
+
+	if h.cache == nil {
+		return
+	}
+
+	st := h.cache.Stats()
+	_, _ = fmt.Fprintf(w, "erion_ember_cache_entries %d\n", st.TotalEntries)
+	_, _ = fmt.Fprintf(w, "erion_ember_cache_hits_total %d\n", st.CacheHits)
+	_, _ = fmt.Fprintf(w, "erion_ember_cache_misses_total %d\n", st.CacheMisses)
+	_, _ = fmt.Fprintf(w, "erion_ember_cache_queries_total %d\n", st.TotalQueries)
+	_, _ = fmt.Fprintf(w, "erion_ember_cache_hit_rate %g\n", st.HitRate)
+}
+
 func (h *httpHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func decodeJSON(r *http.Request, dst any) error {
+func (h *httpHandler) handleReady(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -177,6 +272,20 @@ func decodeJSON(r *http.Request, dst any) error {
 	return errors.New("request body must contain a single JSON object")
 }
 
+func writeDecodeError(w http.ResponseWriter, err error, fallback string) {
+	if isRequestTooLarge(err) {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	http.Error(w, fallback, http.StatusBadRequest)
+}
+
+func isRequestTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr)
+}
+
 func hasText(value string) bool {
 	return strings.TrimSpace(value) != ""
 }
@@ -185,4 +294,79 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func newHTTPMetrics() *httpMetrics {
+	return &httpMetrics{requests: make(map[requestMetricKey]*requestMetric)}
+}
+
+func (h *httpHandler) withObservability(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+		next.ServeHTTP(recorder, r)
+
+		duration := time.Since(startedAt)
+		if h.stats != nil {
+			h.stats.record(r.Method, r.URL.Path, recorder.status, duration)
+		}
+
+		slog.Debug("http request completed",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", recorder.status,
+			"duration", duration,
+		)
+	})
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (m *httpMetrics) record(method, path string, status int, duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := requestMetricKey{Method: method, Path: path, Status: status}
+	metric := m.requests[key]
+	if metric == nil {
+		metric = &requestMetric{}
+		m.requests[key] = metric
+	}
+
+	metric.Count++
+	metric.DurationSum += duration
+}
+
+func (m *httpMetrics) render() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	keys := make([]requestMetricKey, 0, len(m.requests))
+	for key := range m.requests {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Path != keys[j].Path {
+			return keys[i].Path < keys[j].Path
+		}
+		if keys[i].Method != keys[j].Method {
+			return keys[i].Method < keys[j].Method
+		}
+		return keys[i].Status < keys[j].Status
+	})
+
+	var b strings.Builder
+	for _, key := range keys {
+		metric := m.requests[key]
+		labels := fmt.Sprintf("method=%q,path=%q,status=%q", key.Method, key.Path, strconv.Itoa(key.Status))
+		_, _ = fmt.Fprintf(&b, "erion_ember_http_requests_total{%s} %d\n", labels, metric.Count)
+		_, _ = fmt.Fprintf(&b, "erion_ember_http_request_duration_seconds_sum{%s} %.9f\n", labels, metric.DurationSum.Seconds())
+		_, _ = fmt.Fprintf(&b, "erion_ember_http_request_duration_seconds_count{%s} %d\n", labels, metric.Count)
+	}
+
+	return b.String()
 }

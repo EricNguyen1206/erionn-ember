@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	emberv1 "github.com/EricNguyen1206/erion-ember/proto/ember/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,7 +27,7 @@ func NewGRPCServer(addr string, sc *cache.SemanticCache) (*GRPCServer, error) {
 	}
 
 	grpcServer := grpc.NewServer()
-	RegisterSemanticCacheServiceServer(grpcServer, &semanticCacheService{cache: sc})
+	emberv1.RegisterSemanticCacheServiceServer(grpcServer, &semanticCacheService{cache: sc})
 
 	return &GRPCServer{listener: listener, server: grpcServer}, nil
 }
@@ -46,17 +47,25 @@ func (s *GRPCServer) Stop() {
 }
 
 type semanticCacheService struct {
-	UnimplementedSemanticCacheServiceServer
+	emberv1.UnimplementedSemanticCacheServiceServer
 	cache *cache.SemanticCache
 }
 
-func (s *semanticCacheService) Get(ctx context.Context, req *GetRequest) (*GetResponse, error) {
+func (s *semanticCacheService) ready() bool {
+	return s != nil && s.cache != nil
+}
+
+func (s *semanticCacheService) Get(ctx context.Context, req *emberv1.GetRequest) (*emberv1.GetResponse, error) {
+	if !s.ready() {
+		return nil, status.Error(codes.Unavailable, "service not ready")
+	}
+
 	if req == nil || !hasText(req.Prompt) {
 		return nil, status.Error(codes.InvalidArgument, "prompt is required")
 	}
 
 	result, hit := s.cache.Get(ctx, req.Prompt, req.SimilarityThreshold)
-	resp := &GetResponse{Hit: hit}
+	resp := &emberv1.GetResponse{Hit: hit}
 	if hit && result != nil {
 		resp.Response = result.Response
 		resp.Similarity = result.Similarity
@@ -66,7 +75,11 @@ func (s *semanticCacheService) Get(ctx context.Context, req *GetRequest) (*GetRe
 	return resp, nil
 }
 
-func (s *semanticCacheService) Set(ctx context.Context, req *SetRequest) (*SetResponse, error) {
+func (s *semanticCacheService) Set(ctx context.Context, req *emberv1.SetRequest) (*emberv1.SetResponse, error) {
+	if !s.ready() {
+		return nil, status.Error(codes.Unavailable, "service not ready")
+	}
+
 	if req == nil || !hasText(req.Prompt) || !hasText(req.Response) {
 		return nil, status.Error(codes.InvalidArgument, "prompt and response are required")
 	}
@@ -79,20 +92,28 @@ func (s *semanticCacheService) Set(ctx context.Context, req *SetRequest) (*SetRe
 		return nil, status.Errorf(codes.Internal, "set cache entry: %v", err)
 	}
 
-	return &SetResponse{Id: id}, nil
+	return &emberv1.SetResponse{Id: id}, nil
 }
 
-func (s *semanticCacheService) Delete(ctx context.Context, req *DeleteRequest) (*DeleteResponse, error) {
+func (s *semanticCacheService) Delete(ctx context.Context, req *emberv1.DeleteRequest) (*emberv1.DeleteResponse, error) {
+	if !s.ready() {
+		return nil, status.Error(codes.Unavailable, "service not ready")
+	}
+
 	if req == nil || !hasText(req.Prompt) {
 		return nil, status.Error(codes.InvalidArgument, "prompt is required")
 	}
 
-	return &DeleteResponse{Deleted: s.cache.Delete(req.Prompt)}, nil
+	return &emberv1.DeleteResponse{Deleted: s.cache.Delete(req.Prompt)}, nil
 }
 
-func (s *semanticCacheService) Stats(ctx context.Context, req *StatsRequest) (*StatsResponse, error) {
+func (s *semanticCacheService) Stats(ctx context.Context, req *emberv1.StatsRequest) (*emberv1.StatsResponse, error) {
+	if !s.ready() {
+		return nil, status.Error(codes.Unavailable, "service not ready")
+	}
+
 	st := s.cache.Stats()
-	return &StatsResponse{
+	return &emberv1.StatsResponse{
 		TotalEntries: int64(st.TotalEntries),
 		CacheHits:    st.CacheHits,
 		CacheMisses:  st.CacheMisses,
@@ -101,6 +122,10 @@ func (s *semanticCacheService) Stats(ctx context.Context, req *StatsRequest) (*S
 	}, nil
 }
 
-func (s *semanticCacheService) Health(ctx context.Context, req *HealthRequest) (*HealthResponse, error) {
-	return &HealthResponse{Status: "ok"}, nil
+func (s *semanticCacheService) Health(ctx context.Context, req *emberv1.HealthRequest) (*emberv1.HealthResponse, error) {
+	if !s.ready() {
+		return nil, status.Error(codes.Unavailable, "service not ready")
+	}
+
+	return &emberv1.HealthResponse{Status: "ready"}, nil
 }

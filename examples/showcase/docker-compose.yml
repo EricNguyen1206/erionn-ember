@@ -1,0 +1,13 @@
+services:
+  ember-showcase:
+    image: erion-ember:local
+    ports:
+      - "18080:8080"
+      - "19090:9090"
+    environment:
+      HTTP_PORT: "8080"
+      GRPC_PORT: "9090"
+      CACHE_MAX_ELEMENTS: "1000"
+      CACHE_DEFAULT_TTL: "3600"
+      CACHE_SIMILARITY_THRESHOLD: "0.85"
+    restart: unless-stopped

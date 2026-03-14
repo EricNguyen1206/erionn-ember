@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.28.3
-// source: internal/server/semantic_cache.proto
+// source: proto/ember/v1/semantic_cache.proto
 
-package server
+package emberv1
 
 import (
 	context "context"
@@ -267,5 +267,5 @@ var SemanticCacheService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "internal/server/semantic_cache.proto",
+	Metadata: "proto/ember/v1/semantic_cache.proto",
 }

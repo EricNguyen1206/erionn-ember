@@ -1,4 +1,4 @@
-.PHONY: build test clean run lint test-verbose test-race
+.PHONY: build test clean run lint test-verbose test-race docker-build release-validate
 
 BIN := bin/erion-ember
 
@@ -29,5 +29,12 @@ clean:
 ## lint: run golangci-lint
 lint:
 	golangci-lint run ./...
+
+## docker-build: build the container image locally
+docker-build:
+	docker build -t erion-ember:local .
+
+## release-validate: run release validation checklist
+release-validate: build test test-race lint
 
 .DEFAULT_GOAL := build

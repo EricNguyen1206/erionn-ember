@@ -34,6 +34,7 @@ func run() error {
 		"version", "3.0.0",
 		"http_addr", httpAddr,
 		"grpc_addr", grpcAddr,
+		"http_metrics_path", "/metrics",
 		"similarity_threshold", cfg.SimilarityThreshold,
 		"max_elements", cfg.MaxElements,
 		"engine", "bm25-jaccard",
@@ -93,6 +94,15 @@ func run() error {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		shutdownErr = fmt.Errorf("shutdown http server: %w", err)
 	}
+
+	stats := sc.Stats()
+	slog.Info("cache stats",
+		"total_entries", stats.TotalEntries,
+		"cache_hits", stats.CacheHits,
+		"cache_misses", stats.CacheMisses,
+		"total_queries", stats.TotalQueries,
+		"hit_rate", stats.HitRate,
+	)
 
 	return errors.Join(serveErr, shutdownErr)
 }

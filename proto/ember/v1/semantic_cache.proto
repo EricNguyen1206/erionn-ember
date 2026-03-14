@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package ember.v1;
 
-option go_package = "github.com/EricNguyen1206/erion-ember/internal/server;server";
+option go_package = "github.com/EricNguyen1206/erion-ember/proto/ember/v1;emberv1";
 
 service SemanticCacheService {
   rpc Get(GetRequest) returns (GetResponse);
