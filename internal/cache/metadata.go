@@ -9,8 +9,10 @@ import (
 // Entry holds cached prompt/response data.
 type Entry struct {
 	ID                   string
+	NamespaceKey         string
 	PromptHash           uint64
 	Tokens               []string // normalized tokens for BM25+Jaccard similarity scoring
+	Vector               []float32
 	NormalizedPrompt     string
 	CompressedPrompt     []byte
 	CompressedResponse   []byte
@@ -22,8 +24,13 @@ type Entry struct {
 	ExpiresAt            time.Time
 }
 
+type exactKey struct {
+	namespaceKey string
+	promptHash   uint64
+}
+
 type lruItem struct {
-	hash  uint64
+	key   exactKey
 	entry *Entry
 }
 
@@ -31,7 +38,7 @@ type lruItem struct {
 type MetadataStore struct {
 	mu      sync.Mutex
 	maxSize int
-	byHash  map[uint64]*list.Element
+	byHash  map[exactKey]*list.Element
 	lru     *list.List
 }
 
@@ -43,7 +50,7 @@ func NewMetadataStore(maxSize int) *MetadataStore {
 	}
 	return &MetadataStore{
 		maxSize: maxSize,
-		byHash:  make(map[uint64]*list.Element, maxSize),
+		byHash:  make(map[exactKey]*list.Element, maxSize),
 		lru:     list.New(),
 	}
 }
@@ -52,19 +59,28 @@ func NewMetadataStore(maxSize int) *MetadataStore {
 // If the cache is full, the least recently used item is evicted.
 // It returns any replaced or evicted entry so callers can keep secondary indexes in sync.
 func (s *MetadataStore) Set(hash uint64, entry *Entry, ttl time.Duration) (replaced *Entry, evicted *Entry) {
+	return s.SetExact("", hash, entry, ttl)
+}
+
+// SetExact stores an entry in the cache under a namespace-aware exact lookup key.
+func (s *MetadataStore) SetExact(namespaceKey string, hash uint64, entry *Entry, ttl time.Duration) (replaced *Entry, evicted *Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
+	entry.NamespaceKey = namespaceKey
+	entry.PromptHash = hash
 	if ttl > 0 {
 		entry.ExpiresAt = now.Add(ttl)
 	} else {
 		entry.ExpiresAt = time.Time{}
 	}
 
-	if element, found := s.byHash[hash]; found {
+	key := exactLookupKey(namespaceKey, hash)
+	if element, found := s.byHash[key]; found {
 		item := element.Value.(*lruItem)
 		replaced = item.entry
+		item.key = key
 		item.entry = entry
 		s.lru.MoveToFront(element)
 		return replaced, nil
@@ -74,8 +90,8 @@ func (s *MetadataStore) Set(hash uint64, entry *Entry, ttl time.Duration) (repla
 		evicted = s.evictOneForInsertLocked(now)
 	}
 
-	newItem := &lruItem{hash: hash, entry: entry}
-	s.byHash[hash] = s.lru.PushFront(newItem)
+	newItem := &lruItem{key: key, entry: entry}
+	s.byHash[key] = s.lru.PushFront(newItem)
 	return nil, evicted
 }
 
@@ -89,9 +105,20 @@ func (s *MetadataStore) FindByHash(hash uint64) *Entry {
 
 // FindByHashWithExpired looks up an entry and also returns any expired entry pruned during lookup.
 func (s *MetadataStore) FindByHashWithExpired(hash uint64) (entry *Entry, expired *Entry) {
+	return s.FindExactByHashWithExpired("", hash)
+}
+
+// FindExactByHash looks up an entry by namespace-aware prompt hash.
+func (s *MetadataStore) FindExactByHash(namespaceKey string, hash uint64) *Entry {
+	entry, _ := s.FindExactByHashWithExpired(namespaceKey, hash)
+	return entry
+}
+
+// FindExactByHashWithExpired looks up a namespaced entry and returns any expired entry pruned during lookup.
+func (s *MetadataStore) FindExactByHashWithExpired(namespaceKey string, hash uint64) (entry *Entry, expired *Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.findByHashLocked(hash, time.Now())
+	return s.findByHashLocked(exactLookupKey(namespaceKey, hash), time.Now())
 }
 
 // ScanAll returns a snapshot of all live (non-expired) entries for BM25+Jaccard search.
@@ -130,10 +157,21 @@ func (s *MetadataStore) Delete(hash uint64) bool {
 
 // DeleteEntry removes an entry by hash and returns the removed entry when present.
 func (s *MetadataStore) DeleteEntry(hash uint64) (*Entry, bool) {
+	return s.DeleteExactEntry("", hash)
+}
+
+// DeleteExact removes a namespaced entry by hash.
+func (s *MetadataStore) DeleteExact(namespaceKey string, hash uint64) bool {
+	_, deleted := s.DeleteExactEntry(namespaceKey, hash)
+	return deleted
+}
+
+// DeleteExactEntry removes a namespaced entry by hash and returns the removed entry when present.
+func (s *MetadataStore) DeleteExactEntry(namespaceKey string, hash uint64) (*Entry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	element, found := s.byHash[hash]
+	element, found := s.byHash[exactLookupKey(namespaceKey, hash)]
 	if !found {
 		return nil, false
 	}
@@ -151,7 +189,7 @@ func (s *MetadataStore) Len() int {
 func (s *MetadataStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.byHash = make(map[uint64]*list.Element, s.maxSize)
+	s.byHash = make(map[exactKey]*list.Element, s.maxSize)
 	s.lru.Init()
 }
 
@@ -183,8 +221,8 @@ func (s *MetadataStore) StatsLive() (totalEntries, totalCompressedBytes int, exp
 	return totalEntries, totalCompressedBytes, expired
 }
 
-func (s *MetadataStore) findByHashLocked(hash uint64, now time.Time) (entry *Entry, expired *Entry) {
-	element, found := s.byHash[hash]
+func (s *MetadataStore) findByHashLocked(key exactKey, now time.Time) (entry *Entry, expired *Entry) {
+	element, found := s.byHash[key]
 	if !found {
 		return nil, nil
 	}
@@ -225,6 +263,10 @@ func (s *MetadataStore) evictOldestLocked() *Entry {
 func (s *MetadataStore) removeElementLocked(el *list.Element) *Entry {
 	item := el.Value.(*lruItem)
 	s.lru.Remove(el)
-	delete(s.byHash, item.hash)
+	delete(s.byHash, item.key)
 	return item.entry
+}
+
+func exactLookupKey(namespaceKey string, hash uint64) exactKey {
+	return exactKey{namespaceKey: namespaceKey, promptHash: hash}
 }

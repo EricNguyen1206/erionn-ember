@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +18,15 @@ import (
 )
 
 const shutdownTimeout = 5 * time.Second
+
+var newONNXEmbedder = func(cfg cache.ONNXEmbedderConfig) (cache.Embedder, error) {
+	return cache.NewONNXEmbedder(cfg)
+}
+
+type runtimeConfig struct {
+	Engine string
+	ONNX   *cache.ONNXEmbedderConfig
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -29,6 +39,10 @@ func run() error {
 	cfg := loadConfig()
 	httpAddr := ":" + getEnv("HTTP_PORT", "8080")
 	grpcAddr := ":" + getEnv("GRPC_PORT", "9090")
+	sc, engine, err := newSemanticCache(cfg)
+	if err != nil {
+		return err
+	}
 
 	slog.Info("starting erion-ember",
 		"version", "3.0.0",
@@ -36,10 +50,9 @@ func run() error {
 		"grpc_addr", grpcAddr,
 		"similarity_threshold", cfg.SimilarityThreshold,
 		"max_elements", cfg.MaxElements,
-		"engine", "bm25-jaccard",
+		"engine", engine,
 	)
 
-	sc := cache.New(cfg)
 	httpSrv := server.NewHTTPServer(httpAddr, sc)
 	grpcSrv, err := server.NewGRPCServer(grpcAddr, sc)
 	if err != nil {
@@ -115,6 +128,124 @@ func loadConfig() cache.Config {
 		}
 	}
 	return cfg
+}
+
+func loadRuntimeConfig() (runtimeConfig, error) {
+	modelPath := strings.TrimSpace(getEnv("CACHE_EMBEDDING_MODEL_PATH", ""))
+	backend := strings.ToLower(strings.TrimSpace(getEnv("CACHE_EMBEDDER_BACKEND", "")))
+	hasEmbeddingConfig := backend != "" || hasAnyEnv(
+		"CACHE_EMBEDDING_TOKENIZER_PATH",
+		"CACHE_ONNXRUNTIME_SHARED_LIBRARY_PATH",
+		"CACHE_EMBEDDING_MAX_LENGTH",
+		"CACHE_EMBEDDING_DIMENSION",
+		"CACHE_EMBEDDING_OUTPUT_NAME",
+		"CACHE_EMBEDDING_POOLING",
+		"CACHE_EMBEDDING_NORMALIZE",
+		"CACHE_EMBEDDING_INTRA_OP_THREADS",
+		"CACHE_EMBEDDING_INTER_OP_THREADS",
+	)
+	if modelPath == "" {
+		if hasEmbeddingConfig {
+			return runtimeConfig{}, fmt.Errorf("CACHE_EMBEDDING_MODEL_PATH is required when embedder configuration is provided")
+		}
+		return runtimeConfig{Engine: "exact-only"}, nil
+	}
+
+	if backend != "" && backend != "onnx" {
+		return runtimeConfig{}, fmt.Errorf("unsupported embedder backend %q", backend)
+	}
+
+	maxLength, err := parseEnvInt("CACHE_EMBEDDING_MAX_LENGTH", 512)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+	dimension, err := parseEnvInt("CACHE_EMBEDDING_DIMENSION", 384)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+	intraOpThreads, err := parseEnvInt("CACHE_EMBEDDING_INTRA_OP_THREADS", 0)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+	interOpThreads, err := parseEnvInt("CACHE_EMBEDDING_INTER_OP_THREADS", 0)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+	normalize, err := parseEnvBool("CACHE_EMBEDDING_NORMALIZE", true)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+
+	onnxCfg := cache.ONNXEmbedderConfig{
+		ModelPath:         modelPath,
+		TokenizerPath:     strings.TrimSpace(getEnv("CACHE_EMBEDDING_TOKENIZER_PATH", "")),
+		SharedLibraryPath: strings.TrimSpace(getEnv("CACHE_ONNXRUNTIME_SHARED_LIBRARY_PATH", "")),
+		MaxLength:         maxLength,
+		Dimension:         dimension,
+		OutputName:        strings.TrimSpace(getEnv("CACHE_EMBEDDING_OUTPUT_NAME", "")),
+		Pooling:           strings.TrimSpace(getEnv("CACHE_EMBEDDING_POOLING", "mean")),
+		Normalize:         normalize,
+		IntraOpThreads:    intraOpThreads,
+		InterOpThreads:    interOpThreads,
+	}
+	if err := onnxCfg.Validate(); err != nil {
+		return runtimeConfig{}, err
+	}
+
+	return runtimeConfig{
+		Engine: "onnx-cpu",
+		ONNX:   &onnxCfg,
+	}, nil
+}
+
+func newSemanticCache(cfg cache.Config) (*cache.SemanticCache, string, error) {
+	runtimeCfg, err := loadRuntimeConfig()
+	if err != nil {
+		return nil, "", fmt.Errorf("load runtime config: %w", err)
+	}
+	if runtimeCfg.ONNX == nil {
+		return cache.New(cfg), runtimeCfg.Engine, nil
+	}
+
+	embedder, err := newONNXEmbedder(*runtimeCfg.ONNX)
+	if err != nil {
+		return nil, "", fmt.Errorf("initialize ONNX embedder: %w", err)
+	}
+
+	return cache.NewWithDependencies(cfg, embedder, cache.NewFlatIndex()), runtimeCfg.Engine, nil
+}
+
+func parseEnvInt(key string, fallback int) (int, error) {
+	v := strings.TrimSpace(getEnv(key, ""))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return n, nil
+}
+
+func parseEnvBool(key string, fallback bool) (bool, error) {
+	v := strings.TrimSpace(getEnv(key, ""))
+	if v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return b, nil
+}
+
+func hasAnyEnv(keys ...string) bool {
+	for _, key := range keys {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func getEnv(key, fallback string) string {

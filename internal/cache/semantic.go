@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 )
@@ -46,18 +47,15 @@ type Stats struct {
 	HitRate      float64
 }
 
-// SemanticCache orchestrates prompt-based caching with semantic similarity matching.
-//
-//	Fast path  -> xxhash exact lookup       (~0us)
-//	Slow path  -> BM25+Jaccard token scan   (~N us, O(n) over stored entries)
-//
-// Zero dependencies: no model files, no CGO, no external services.
+// SemanticCache orchestrates prompt-based caching with exact lookup first and
+// optional namespace-scoped vector search as a semantic fallback.
 type SemanticCache struct {
 	cfg        Config
 	normalizer *Normalizer
 	compressor *Compressor
 	store      *MetadataStore
-	scorer     *Scorer
+	embedder   Embedder
+	vectorIdx  VectorIndex
 	hits       atomic.Int64
 	misses     atomic.Int64
 	total      atomic.Int64
@@ -66,27 +64,42 @@ type SemanticCache struct {
 
 // New creates a new SemanticCache instance.
 func New(cfg Config) *SemanticCache {
+	return NewWithDependencies(cfg, nil, NewFlatIndex())
+}
+
+// NewWithDependencies creates a SemanticCache with optional semantic-search dependencies.
+func NewWithDependencies(cfg Config, embedder Embedder, vectorIdx VectorIndex) *SemanticCache {
+	if vectorIdx == nil {
+		vectorIdx = NewFlatIndex()
+	}
+
 	return &SemanticCache{
 		cfg:        cfg,
 		normalizer: NewNormalizer(),
 		compressor: NewCompressor(),
 		store:      NewMetadataStore(cfg.MaxElements),
-		scorer:     NewScorer(),
+		embedder:   embedder,
+		vectorIdx:  vectorIdx,
 	}
 }
 
 // Get looks up a prompt in the cache. Returns (result, true) on hit, (nil, false) on miss.
-func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32) (*GetResult, bool) {
+func (c *SemanticCache) Get(ctx context.Context, prompt string, threshold float32) (*GetResult, bool) {
+	return c.GetInNamespace(ctx, Namespace{}, prompt, threshold)
+}
+
+// GetInNamespace looks up a prompt within a namespace.
+func (c *SemanticCache) GetInNamespace(ctx context.Context, namespace Namespace, prompt string, threshold float32) (*GetResult, bool) {
 	c.total.Add(1)
 	if threshold == 0 {
 		threshold = c.cfg.SimilarityThreshold
 	}
 
+	namespaceKey := cacheNamespaceKey(namespace)
 	normalized := c.normalizer.Normalize(prompt)
 	hash := c.normalizer.Hash(normalized)
 
-	// Fast path: exact xxhash match.
-	if entry, expired := c.store.FindByHashWithExpired(hash); entry != nil {
+	if entry, expired := c.store.FindExactByHashWithExpired(namespaceKey, hash); entry != nil {
 		response, err := c.compressor.Decompress(entry.CompressedResponse, entry.OriginalResponseSize)
 		if err == nil {
 			c.hits.Add(1)
@@ -98,45 +111,39 @@ func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32)
 			}, true
 		}
 	} else {
-		c.removeEntryTokens(expired)
+		c.removeEntryIndexes(expired)
 	}
 
-	queryTokens := Tokenize(normalized)
-	if len(queryTokens) == 0 {
+	if c.embedder == nil || c.vectorIdx == nil || normalized == "" {
 		c.misses.Add(1)
 		return nil, false
 	}
 
-	// Slow path: BM25 + Jaccard similarity scan.
-	allEntries, expiredEntries := c.store.ScanAllLive()
-	c.removeEntriesTokens(expiredEntries)
-
-	var bestEntry *Entry
-	var bestScore float32
-
-	for _, entry := range allEntries {
-		score := c.scorer.Score(queryTokens, entry.Tokens)
-		if score > bestScore {
-			bestScore = score
-			bestEntry = entry
-		}
+	queryVector, err := c.embedder.Embed(ctx, normalized)
+	if err != nil || len(queryVector) == 0 {
+		c.misses.Add(1)
+		return nil, false
 	}
 
-	if bestEntry != nil && bestScore >= threshold {
-		// Re-fetch to refresh LRU metadata and ensure the entry still exists.
-		if entry, expired := c.store.FindByHashWithExpired(bestEntry.PromptHash); entry != nil {
+	results := c.vectorIdx.Search(namespaceKey, queryVector, c.store.Len())
+	for _, result := range results {
+		if result.Score < threshold {
+			break
+		}
+
+		if entry, expired := c.store.FindExactByHashWithExpired(result.NamespaceKey, result.PromptHash); entry != nil {
 			response, err := c.compressor.Decompress(entry.CompressedResponse, entry.OriginalResponseSize)
 			if err == nil {
 				c.hits.Add(1)
 				return &GetResult{
 					Response:   response,
-					Similarity: bestScore,
+					Similarity: result.Score,
 					ExactMatch: false,
 					CachedAt:   entry.CreatedAt,
 				}, true
 			}
 		} else {
-			c.removeEntryTokens(expired)
+			c.removeEntryIndexes(expired)
 		}
 	}
 
@@ -145,7 +152,12 @@ func (c *SemanticCache) Get(_ context.Context, prompt string, threshold float32)
 }
 
 // Set stores a prompt + response in the cache.
-func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time.Duration) (string, error) {
+func (c *SemanticCache) Set(ctx context.Context, prompt, response string, ttl time.Duration) (string, error) {
+	return c.SetInNamespace(ctx, Namespace{}, prompt, response, ttl)
+}
+
+// SetInNamespace stores a prompt + response pair inside a namespace.
+func (c *SemanticCache) SetInNamespace(ctx context.Context, namespace Namespace, prompt, response string, ttl time.Duration) (string, error) {
 	if prompt == "" {
 		return "", ErrEmptyPrompt
 	}
@@ -156,9 +168,9 @@ func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time
 		ttl = c.cfg.DefaultTTL
 	}
 
+	namespaceKey := cacheNamespaceKey(namespace)
 	normalized := c.normalizer.Normalize(prompt)
 	hash := c.normalizer.Hash(normalized)
-	tokens := Tokenize(normalized)
 
 	compPrompt := c.compressor.Compress(prompt)
 	compResp := c.compressor.Compress(response)
@@ -167,8 +179,8 @@ func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time
 	now := time.Now()
 	entry := &Entry{
 		ID:                   id,
+		NamespaceKey:         namespaceKey,
 		PromptHash:           hash,
-		Tokens:               tokens,
 		NormalizedPrompt:     normalized,
 		CompressedPrompt:     compPrompt,
 		CompressedResponse:   compResp,
@@ -178,21 +190,41 @@ func (c *SemanticCache) Set(_ context.Context, prompt, response string, ttl time
 		LastAccessed:         now,
 	}
 
-	replaced, evicted := c.store.Set(hash, entry, ttl)
-	c.removeEntryTokens(replaced)
-	c.removeEntryTokens(evicted)
-	c.scorer.UpdateIDF(tokens)
+	if c.embedder != nil {
+		vector, err := c.embedder.Embed(ctx, normalized)
+		if err != nil {
+			slog.Debug("semantic cache embed failed; storing exact-only entry", "namespace", namespaceKey, "prompt_hash", hash, "error", err)
+		} else if len(vector) > 0 {
+			entry.Vector = vector
+		}
+	}
+
+	replaced, evicted := c.store.SetExact(namespaceKey, hash, entry, ttl)
+	c.removeEntryIndexes(replaced)
+	c.removeEntryIndexes(evicted)
+
+	if len(entry.Vector) > 0 && c.vectorIdx != nil {
+		if err := c.vectorIdx.Insert(entry); err != nil {
+			slog.Debug("semantic cache vector insert failed; storing exact-only entry", "namespace", namespaceKey, "prompt_hash", hash, "error", err)
+		}
+	}
 
 	return id, nil
 }
 
 // Delete removes an entry from the cache by its original prompt.
 func (c *SemanticCache) Delete(prompt string) bool {
+	return c.DeleteInNamespace(Namespace{}, prompt)
+}
+
+// DeleteInNamespace removes an entry from a namespace by its original prompt.
+func (c *SemanticCache) DeleteInNamespace(namespace Namespace, prompt string) bool {
+	namespaceKey := cacheNamespaceKey(namespace)
 	normalized := c.normalizer.Normalize(prompt)
 	hash := c.normalizer.Hash(normalized)
-	entry, deleted := c.store.DeleteEntry(hash)
+	entry, deleted := c.store.DeleteExactEntry(namespaceKey, hash)
 	if deleted {
-		c.removeEntryTokens(entry)
+		c.removeEntryIndexes(entry)
 	}
 	return deleted
 }
@@ -208,7 +240,7 @@ func (c *SemanticCache) Stats() Stats {
 	}
 
 	entries, _, expired := c.store.StatsLive()
-	c.removeEntriesTokens(expired)
+	c.removeEntriesIndexes(expired)
 
 	return Stats{
 		TotalEntries: entries,
@@ -219,15 +251,22 @@ func (c *SemanticCache) Stats() Stats {
 	}
 }
 
-func (c *SemanticCache) removeEntriesTokens(entries []*Entry) {
+func (c *SemanticCache) removeEntriesIndexes(entries []*Entry) {
 	for _, entry := range entries {
-		c.removeEntryTokens(entry)
+		c.removeEntryIndexes(entry)
 	}
 }
 
-func (c *SemanticCache) removeEntryTokens(entry *Entry) {
-	if entry == nil || len(entry.Tokens) == 0 {
+func (c *SemanticCache) removeEntryIndexes(entry *Entry) {
+	if entry == nil || c.vectorIdx == nil {
 		return
 	}
-	c.scorer.RemoveDoc(entry.Tokens)
+	c.vectorIdx.Delete(entry.NamespaceKey, entry.PromptHash)
+}
+
+func cacheNamespaceKey(namespace Namespace) string {
+	if namespace == (Namespace{}) {
+		return ""
+	}
+	return NamespaceKey(namespace)
 }

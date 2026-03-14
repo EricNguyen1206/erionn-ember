@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,69 @@ func newTestCache() *cache.SemanticCache {
 		SimilarityThreshold: 0.85,
 		DefaultTTL:          time.Hour,
 	})
+}
+
+type fakeEmbedder struct {
+	vectors map[string][]float32
+}
+
+func (e fakeEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	vector, ok := e.vectors[text]
+	if !ok {
+		return nil, fmt.Errorf("unexpected embed request for %q", text)
+	}
+	return append([]float32(nil), vector...), nil
+}
+
+func (e fakeEmbedder) Dimension() int {
+	for _, vector := range e.vectors {
+		return len(vector)
+	}
+	return 0
+}
+
+func newVectorTestCache(vectors map[string][]float32) *cache.SemanticCache {
+	return cache.NewWithDependencies(
+		cache.Config{
+			MaxElements:         100,
+			SimilarityThreshold: 0.85,
+			DefaultTTL:          time.Hour,
+		},
+		fakeEmbedder{vectors: vectors},
+		cache.NewFlatIndex(),
+	)
+}
+
+func newBenchmarkVectorTestCache(maxElements int, vectors map[string][]float32) *cache.SemanticCache {
+	return cache.NewWithDependencies(
+		cache.Config{
+			MaxElements:         maxElements,
+			SimilarityThreshold: 0.85,
+			DefaultTTL:          time.Hour,
+		},
+		fakeEmbedder{vectors: vectors},
+		cache.NewFlatIndex(),
+	)
+}
+
+func benchmarkSemanticCorpus(size int) (map[string][]float32, []string, string, string) {
+	vectors := make(map[string][]float32, size+1)
+	prompts := make([]string, 0, size)
+	semanticTarget := fmt.Sprintf("stored prompt %03d", size/2)
+	for i := 0; i < size; i++ {
+		prompt := fmt.Sprintf("stored prompt %03d", i)
+		vector := []float32{0, 1, float32((i % 17) + 1)}
+		if prompt == semanticTarget {
+			vector = []float32{1, 0, 0}
+		}
+		vectors[prompt] = vector
+		prompts = append(prompts, prompt)
+	}
+
+	queryPrompt := "semantic lookup query"
+	vectors[queryPrompt] = append([]float32(nil), vectors[semanticTarget]...)
+
+	return vectors, prompts, queryPrompt, semanticTarget
 }
 
 func TestSemanticCache_ExactHit(t *testing.T) {
@@ -71,68 +135,130 @@ func TestSemanticCache_NormalizeBeforeHash(t *testing.T) {
 	}
 }
 
-// ── BM25+Jaccard semantic similarity (slow path) ─────────────────────────
+func TestSemanticCache_NamespaceIsolation(t *testing.T) {
+	sc := newVectorTestCache(map[string][]float32{
+		"tenant a prompt": {1, 0},
+		"tenant b prompt": {1, 0},
+		"shared query":    {1, 0},
+	})
+	ctx := context.Background()
+	nsA := cache.Namespace{Model: "text-embedding-3-small", TenantID: "tenant-a", SystemPromptHash: "sys"}
+	nsB := cache.Namespace{Model: "text-embedding-3-small", TenantID: "tenant-b", SystemPromptHash: "sys"}
 
-func TestSemanticCache_SimilarityHit_SameTokens(t *testing.T) {
-	// BM25+Jaccard is order-independent: same token set → Jaccard=1.0
-	// "go language fast compiled" and "compiled fast language go" share all tokens.
-	// With a single-doc corpus, combined score ~0.67 → use threshold 0.6.
-	sc := newTestCache()
+	if _, err := sc.SetInNamespace(ctx, nsA, "tenant a prompt", "response-a", 0); err != nil {
+		t.Fatalf("SetInNamespace() tenant A failed: %v", err)
+	}
+	if _, err := sc.SetInNamespace(ctx, nsB, "tenant b prompt", "response-b", 0); err != nil {
+		t.Fatalf("SetInNamespace() tenant B failed: %v", err)
+	}
+
+	resultA, ok := sc.GetInNamespace(ctx, nsA, "shared query", 0.8)
+	if !ok {
+		t.Fatal("expected namespace A semantic hit, got miss")
+	}
+	if resultA.Response != "response-a" {
+		t.Fatalf("namespace A response = %q, want %q", resultA.Response, "response-a")
+	}
+
+	resultB, ok := sc.GetInNamespace(ctx, nsB, "shared query", 0.8)
+	if !ok {
+		t.Fatal("expected namespace B semantic hit, got miss")
+	}
+	if resultB.Response != "response-b" {
+		t.Fatalf("namespace B response = %q, want %q", resultB.Response, "response-b")
+	}
+}
+
+func TestSemanticCache_ExactHitPrecedesVectorSearch(t *testing.T) {
+	sc := newVectorTestCache(map[string][]float32{
+		"exact prompt":  {1, 0},
+		"semantic peer": {1, 0},
+	})
 	ctx := context.Background()
 
-	if _, err := sc.Set(ctx, "go language fast compiled", "Cached response.", 0); err != nil {
+	if _, err := sc.SetInNamespace(ctx, cache.Namespace{}, "exact prompt", "exact-response", 0); err != nil {
+		t.Fatalf("SetInNamespace() exact failed: %v", err)
+	}
+	if _, err := sc.SetInNamespace(ctx, cache.Namespace{}, "semantic peer", "semantic-response", 0); err != nil {
+		t.Fatalf("SetInNamespace() semantic failed: %v", err)
+	}
+
+	result, ok := sc.Get(ctx, "exact prompt", 0.8)
+	if !ok {
+		t.Fatal("expected exact hit, got miss")
+	}
+	if !result.ExactMatch {
+		t.Fatal("expected exact hit to win before vector search")
+	}
+	if result.Response != "exact-response" {
+		t.Fatalf("response = %q, want %q", result.Response, "exact-response")
+	}
+}
+
+func TestSemanticCache_VectorThreshold(t *testing.T) {
+	sc := newVectorTestCache(map[string][]float32{
+		"stored prompt": {0.8, 0.6},
+		"query prompt":  {1, 0},
+	})
+	ctx := context.Background()
+
+	if _, err := sc.Set(ctx, "stored prompt", "threshold-response", 0); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	// Different word order → different xxhash (exact miss) but Jaccard=1.0 (semantic hit)
-	result, ok := sc.Get(ctx, "compiled fast language go", 0.6)
+	if _, ok := sc.Get(ctx, "query prompt", 0.81); ok {
+		t.Fatal("expected miss above cosine threshold")
+	}
+
+	result, ok := sc.Get(ctx, "query prompt", 0.8)
 	if !ok {
-		t.Fatal("expected BM25+Jaccard similarity hit for same-token rearrangement")
+		t.Fatal("expected hit at cosine threshold")
 	}
 	if result.ExactMatch {
-		t.Error("different word order should not be an exact match")
+		t.Fatal("expected vector hit, got exact match")
 	}
-	if result.Response != "Cached response." {
-		t.Errorf("wrong response: %q", result.Response)
+	if result.Response != "threshold-response" {
+		t.Fatalf("response = %q, want %q", result.Response, "threshold-response")
 	}
-	if result.Similarity < 0.6 {
-		t.Errorf("similarity %f should be ≥ 0.6", result.Similarity)
-	}
-}
-
-func TestSemanticCache_SimilarityHit_Paraphrase(t *testing.T) {
-	// BM25+Jaccard advantage over SimHash: partial token overlap
-	// "explain goroutines in go" vs "how do goroutines work in go" share key tokens.
-	sc := newTestCache()
-	ctx := context.Background()
-	if _, err := sc.Set(ctx, "explain goroutines in go", "Goroutines are lightweight threads.", 0); err != nil {
-		t.Fatalf("Set failed: %v", err)
-	}
-
-	// With a single-doc corpus, partial overlap score is around 0.22.
-	// We use 0.2 as a threshold for detection in this minimal set.
-	result, ok := sc.Get(ctx, "how do goroutines work in go", 0.2)
-	if !ok {
-		t.Fatal("expected paraphrase hit — goroutines+go in common")
-	}
-	if result.Response != "Goroutines are lightweight threads." {
-		t.Errorf("wrong response: %q", result.Response)
-	}
-	if result.Similarity < 0.2 {
-		t.Errorf("similarity %f should be ≥ 0.2", result.Similarity)
+	if result.Similarity != 0.8 {
+		t.Fatalf("similarity = %f, want %f", result.Similarity, 0.8)
 	}
 }
 
-func TestSemanticCache_SimHashMiss_Unrelated(t *testing.T) {
-	sc := newTestCache()
+func TestSemanticCache_DeleteRemovesVectorReachability(t *testing.T) {
+	sc := newVectorTestCache(map[string][]float32{
+		"delete me":    {1, 0},
+		"nearby query": {1, 0},
+	})
 	ctx := context.Background()
-	if _, err := sc.Set(ctx, "weather forecast tomorrow rain", "It will rain.", 0); err != nil {
+
+	if _, err := sc.Set(ctx, "delete me", "gone", 0); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
-	// Completely unrelated → zero token overlap → Jaccard=0, BM25=0 → miss
-	_, ok := sc.Get(ctx, "machine learning neural networks deep", 0.85)
-	if ok {
-		t.Error("unrelated prompts should not produce a semantic hit")
+	if !sc.Delete("delete me") {
+		t.Fatal("Delete failed")
+	}
+
+	if _, ok := sc.Get(ctx, "nearby query", 0.8); ok {
+		t.Fatal("expected miss after delete removed vector reachability")
+	}
+}
+
+func TestSemanticCache_TTLSkipsExpiredVectorEntries(t *testing.T) {
+	sc := newVectorTestCache(map[string][]float32{
+		"expire me":    {1, 0},
+		"nearby query": {1, 0},
+	})
+	ctx := context.Background()
+
+	if _, err := sc.Set(ctx, "expire me", "bye", 50*time.Millisecond); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if _, ok := sc.Get(ctx, "nearby query", 0.8); ok {
+		t.Fatal("expected miss after TTL expiry removed vector candidate")
 	}
 }
 
@@ -262,6 +388,60 @@ func BenchmarkSemanticCache_GetHit(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = sc.Get(ctx, prompt, 0.85)
+	}
+}
+
+func BenchmarkSemanticCache_GetExactHit(b *testing.B) {
+	ctx := context.Background()
+	namespace := cache.Namespace{Model: "text-embedding-3-small", TenantID: "tenant-a", SystemPromptHash: "sys"}
+	sc := newVectorTestCache(map[string][]float32{
+		"exact prompt": {1, 0},
+	})
+	if _, err := sc.SetInNamespace(ctx, namespace, "exact prompt", "exact-response", 0); err != nil {
+		b.Fatalf("SetInNamespace failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, ok := sc.GetInNamespace(ctx, namespace, "exact prompt", 0.8)
+		if !ok {
+			b.Fatal("expected hit, got miss")
+		}
+		if !result.ExactMatch {
+			b.Fatal("expected exact hit")
+		}
+	}
+}
+
+// BenchmarkSemanticCache_GetVectorSemanticHit measures cache-side semantic lookup
+// overhead using a fake embedder so embedder runtime does not dominate the result.
+func BenchmarkSemanticCache_GetVectorSemanticHit(b *testing.B) {
+	ctx := context.Background()
+	namespace := cache.Namespace{Model: "text-embedding-3-small", TenantID: "tenant-a", SystemPromptHash: "sys"}
+	vectors, prompts, queryPrompt, semanticTarget := benchmarkSemanticCorpus(256)
+	sc := newBenchmarkVectorTestCache(len(prompts)+1, vectors)
+	for _, prompt := range prompts {
+		response := fmt.Sprintf("response for %s", prompt)
+		if prompt == semanticTarget {
+			response = "semantic-response"
+		}
+		if _, err := sc.SetInNamespace(ctx, namespace, prompt, response, 0); err != nil {
+			b.Fatalf("SetInNamespace(%q) failed: %v", prompt, err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, ok := sc.GetInNamespace(ctx, namespace, queryPrompt, 0.8)
+		if !ok {
+			b.Fatal("expected semantic hit, got miss")
+		}
+		if result.ExactMatch {
+			b.Fatal("expected vector semantic hit")
+		}
+		if result.Response != "semantic-response" {
+			b.Fatalf("response = %q, want %q", result.Response, "semantic-response")
+		}
 	}
 }
 

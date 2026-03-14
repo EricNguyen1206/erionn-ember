@@ -57,8 +57,9 @@ func (s *HTTPServer) ListenAndServe() error              { return s.server.Liste
 func (s *HTTPServer) Shutdown(ctx context.Context) error { return s.server.Shutdown(ctx) }
 
 type getReq struct {
-	Prompt              string  `json:"prompt"`
-	SimilarityThreshold float32 `json:"similarity_threshold,omitempty"`
+	Namespace           httpNamespace `json:"namespace"`
+	Prompt              string        `json:"prompt"`
+	SimilarityThreshold float32       `json:"similarity_threshold,omitempty"`
 }
 
 type getResp struct {
@@ -69,9 +70,10 @@ type getResp struct {
 }
 
 type setReq struct {
-	Prompt   string `json:"prompt"`
-	Response string `json:"response"`
-	TTL      int    `json:"ttl,omitempty"`
+	Namespace httpNamespace `json:"namespace"`
+	Prompt    string        `json:"prompt"`
+	Response  string        `json:"response"`
+	TTL       int           `json:"ttl,omitempty"`
 }
 
 type setResp struct {
@@ -79,7 +81,14 @@ type setResp struct {
 }
 
 type deleteReq struct {
-	Prompt string `json:"prompt"`
+	Namespace httpNamespace `json:"namespace"`
+	Prompt    string        `json:"prompt"`
+}
+
+type httpNamespace struct {
+	Model            string `json:"model"`
+	TenantID         string `json:"tenant_id"`
+	SystemPromptHash string `json:"system_prompt_hash"`
 }
 
 type deleteResp struct {
@@ -96,12 +105,16 @@ type statsResp struct {
 
 func (h *httpHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	var req getReq
-	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) {
-		http.Error(w, "prompt is required", http.StatusBadRequest)
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, "namespace and prompt are required", http.StatusBadRequest)
+		return
+	}
+	if !req.Namespace.valid() || !hasText(req.Prompt) {
+		http.Error(w, "namespace and prompt are required", http.StatusBadRequest)
 		return
 	}
 
-	result, hit := h.cache.Get(r.Context(), req.Prompt, req.SimilarityThreshold)
+	result, hit := h.cache.GetInNamespace(r.Context(), req.Namespace.cacheNamespace(), req.Prompt, req.SimilarityThreshold)
 	resp := getResp{Hit: hit}
 	if hit && result != nil {
 		resp.Response = result.Response
@@ -114,8 +127,12 @@ func (h *httpHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	var req setReq
-	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) || !hasText(req.Response) {
-		http.Error(w, "prompt and response are required", http.StatusBadRequest)
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, "namespace, prompt, and response are required", http.StatusBadRequest)
+		return
+	}
+	if !req.Namespace.valid() || !hasText(req.Prompt) || !hasText(req.Response) {
+		http.Error(w, "namespace, prompt, and response are required", http.StatusBadRequest)
 		return
 	}
 	if req.TTL < 0 {
@@ -123,9 +140,9 @@ func (h *httpHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := h.cache.Set(r.Context(), req.Prompt, req.Response, time.Duration(req.TTL)*time.Second)
+	id, err := h.cache.SetInNamespace(r.Context(), req.Namespace.cacheNamespace(), req.Prompt, req.Response, time.Duration(req.TTL)*time.Second)
 	if err != nil {
-		slog.Error("cache.Set failed", "err", err)
+		slog.Error("cache.SetInNamespace failed", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -135,12 +152,16 @@ func (h *httpHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	var req deleteReq
-	if err := decodeJSON(r, &req); err != nil || !hasText(req.Prompt) {
-		http.Error(w, "prompt is required", http.StatusBadRequest)
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, "namespace and prompt are required", http.StatusBadRequest)
+		return
+	}
+	if !req.Namespace.valid() || !hasText(req.Prompt) {
+		http.Error(w, "namespace and prompt are required", http.StatusBadRequest)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, deleteResp{Deleted: h.cache.Delete(req.Prompt)})
+	writeJSON(w, http.StatusOK, deleteResp{Deleted: h.cache.DeleteInNamespace(req.Namespace.cacheNamespace(), req.Prompt)})
 }
 
 func (h *httpHandler) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +200,18 @@ func decodeJSON(r *http.Request, dst any) error {
 
 func hasText(value string) bool {
 	return strings.TrimSpace(value) != ""
+}
+
+func (n httpNamespace) valid() bool {
+	return hasText(n.Model) && hasText(n.TenantID) && hasText(n.SystemPromptHash)
+}
+
+func (n httpNamespace) cacheNamespace() cache.Namespace {
+	return cache.Namespace{
+		Model:            n.Model,
+		TenantID:         n.TenantID,
+		SystemPromptHash: n.SystemPromptHash,
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

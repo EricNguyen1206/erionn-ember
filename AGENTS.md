@@ -14,6 +14,7 @@ Guidance for coding agents working in `E:\Workspace\Backend\go\erionn-ember`.
 - Entry point: `cmd/server/main.go`
 - Binary target: `bin/erion-ember`
 - Service role: standalone semantic cache for LLM prompt/response pairs
+- Public transports: gRPC-first API plus HTTP/JSON compatibility endpoints
 
 ## Rule Files
 - `.cursorrules`: not present
@@ -28,8 +29,8 @@ Guidance for coding agents working in `E:\Workspace\Backend\go\erionn-ember`.
 
 ## Repository Map
 - `cmd/server/main.go`: env loading, config parsing, startup, graceful shutdown
-- `internal/server/http.go`: HTTP routes, JSON request/response types, handlers, `writeJSON`
-- `internal/server/grpc.go`: gRPC service contract, request/response messages, and server wrapper
+- `internal/server/http.go`: HTTP compatibility routes, JSON request/response types, handlers, `writeJSON`
+- `internal/server/grpc.go`: primary gRPC service contract, namespace-aware transport wrapper
 - `internal/cache/semantic.go`: public cache API, stats, exact and semantic lookup orchestration
 - `internal/cache/metadata.go`: metadata storage, LRU behavior, TTL, locking
 - `internal/cache/scorer.go`: BM25 + Jaccard scoring, token statistics
@@ -69,8 +70,11 @@ Guidance for coding agents working in `E:\Workspace\Backend\go\erionn-ember`.
 ## Runtime and Environment
 - Default HTTP port is `8080`.
 - Default gRPC port is `9090`.
-- Main env vars: `HTTP_PORT`, `GRPC_PORT`, `CACHE_SIMILARITY_THRESHOLD`, `CACHE_MAX_ELEMENTS`, `CACHE_DEFAULT_TTL`.
+- gRPC is the primary transport; keep HTTP behavior aligned for compatibility rather than inventing new semantics there first.
+- Main env vars: `HTTP_PORT`, `GRPC_PORT`, `CACHE_SIMILARITY_THRESHOLD`, `CACHE_MAX_ELEMENTS`, `CACHE_DEFAULT_TTL`, `CACHE_EMBEDDER_BACKEND`, `CACHE_EMBEDDING_MODEL_PATH`, `CACHE_EMBEDDING_TOKENIZER_PATH`, `CACHE_ONNXRUNTIME_SHARED_LIBRARY_PATH`.
 - `CACHE_DEFAULT_TTL` is expressed in seconds in env/config parsing and converted to `time.Duration`.
+- When `CACHE_EMBEDDING_MODEL_PATH` is unset, the server intentionally runs in exact-only mode.
+- ONNX mode requires a complete local runtime configuration; partial ONNX env configuration should fail fast rather than silently degrading.
 - Keep env var names and defaults aligned across `cmd/server/main.go`, `README.md`, and `docker-compose.yml`.
 - Local container startup: `docker-compose up -d`
 
@@ -80,6 +84,8 @@ Guidance for coding agents working in `E:\Workspace\Backend\go\erionn-ember`.
 - Prefer putting cache behavior, scoring, normalization, compression, and storage rules in `internal/cache`.
 - Keep startup and shutdown wiring in `cmd/server`; avoid pushing domain logic into `main.go`.
 - Preserve current HTTP routes, JSON field names, and gRPC method names unless the task explicitly changes the public API.
+- Namespace-aware operations belong in the cache layer; transports should validate and pass namespace through rather than reimplement namespace behavior.
+- `Stats` are currently global cache stats even when the request shape includes namespace; document that honestly and do not fake namespace-scoped counters.
 - Maintain the exact/semantic lookup split: fast hash lookup first, token scoring second.
 
 ## Go Style Expectations

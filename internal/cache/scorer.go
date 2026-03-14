@@ -18,7 +18,8 @@ const (
 )
 
 // Scorer computes BM25 + Jaccard hybrid similarity between token slices.
-// It maintains incremental IDF state updated on every Set/Delete.
+// The active cache retrieval path now uses vector search; these utilities remain
+// available for tests, benchmarks, and tokenizer reuse.
 type Scorer struct {
 	mu    sync.RWMutex
 	df    map[string]int // document frequency per term
