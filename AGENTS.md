@@ -4,8 +4,8 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 
 ## Purpose
 - This file is the operating manual for agentic coding tools in this repository.
-- Use it alongside the code, `README.md`, `CONTRIBUTING.md`, `Makefile`, and CI workflow.
-- Prefer the current Go implementation over assumptions from generic Go templates or stale tooling docs.
+- Use it alongside the code, `README.md`, `Makefile`, and the docs in `docs/`.
+- Prefer the current Go implementation over assumptions from generic Redis clones or old semantic-cache history.
 
 ## Project Snapshot
 - Language: Go
@@ -13,10 +13,10 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 - Go version: `1.23.4`
 - Primary binary: `bin/erion-ember`
 - Entry point: `cmd/server/main.go`
-- Service role: standalone semantic cache for LLM prompt/response pairs
-- Primary product context: semantic cache platform for ChatGPT-like web chat experiences; future features should stay aligned with multi-turn chat workflows, low latency, cache correctness, and production-grade operability
-- Public transports: HTTP/JSON and gRPC
-- Core engine: exact hash lookup first, BM25 + Jaccard semantic lookup second
+- Service role: in-memory data cache with gRPC as the main protocol
+- Public surfaces: gRPC data API plus HTTP admin endpoints
+- Supported data types: strings, hashes, lists, sets
+- Pub/sub: in-memory realtime delivery for online subscribers only
 
 ## Rule Files
 - `.cursorrules`: not present
@@ -25,28 +25,31 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 - If any of those files are added later, merge their instructions into this file and resolve conflicts explicitly.
 
 ## Source of Truth
-- Trust the Go code first, then `README.md`, `CONTRIBUTING.md`, `Makefile`, and `.github/workflows/docker-publish.yml` on GitHub.
-- Keep the repository focused on the cache server; do not reintroduce client SDKs or unrelated platform code.
-- Keep `cmd/server` thin and place domain logic under `internal/cache` or `internal/server`.
+- Trust the Go code first, then `README.md`, `docs/API_REFERENCE.md`, `docs/ARCHITECTURE.md`, and `Makefile`.
+- Keep the repository focused on the cache server.
+- Do not reintroduce semantic-cache logic, RESP parsing, or HTTP data routes.
 
 ## Repository Map
-- `cmd/server/main.go`: config loading, env parsing, startup, signal handling, graceful shutdown
-- `internal/cache/semantic.go`: public cache API, stats, exact lookup, semantic lookup orchestration
-- `internal/cache/metadata.go`: metadata storage, LRU behavior, TTL enforcement, locking
-- `internal/cache/scorer.go`: BM25 + Jaccard scoring, token statistics, document frequency updates
-- `internal/cache/normalizer.go`: prompt normalization and hashing helpers
-- `internal/cache/compressor.go`: LZ4 compression and decompression helpers
-- `internal/server/http.go`: HTTP routes, request/response structs, JSON decode/encode helpers
-- `internal/server/grpc.go`: gRPC service definitions and transport wrapper
-- `internal/cache/*_test.go`: unit tests and benchmarks for cache internals
-- `docker-compose.yml`: local container startup defaults
+- `cmd/server/main.go`: config loading, startup, shutdown, shared dependency wiring
+- `internal/server/grpc.go`: gRPC handlers and gRPC status mapping
+- `internal/server/http.go`: `/health`, `/ready`, `/metrics`
+- `internal/store/entry.go`: entry model, key types, store stats
+- `internal/store/store.go`: generic key operations and TTL logic
+- `internal/store/strings.go`: string commands
+- `internal/store/hashes.go`: hash commands
+- `internal/store/lists.go`: list commands
+- `internal/store/sets.go`: set commands
+- `internal/pubsub/hub.go`: pub/sub subscription registry and fan-out
+- `proto/ember/v1/cache.proto`: public gRPC contract
+- `examples/go/raw-grpc-cache/main.go`: simple cache example
+- `examples/go/raw-grpc-pubsub/main.go`: simple pub/sub example
 
 ## Build Commands
 - Main build: `make build`
 - Direct binary build: `go build -o bin/erion-ember ./cmd/server/`
 - Compile check entrypoint only: `go build ./cmd/server`
 - Compile all packages: `go build ./...`
-- CI-style binary build: `go build -ldflags="-s -w" -o erion-ember ./cmd/server/`
+- Generate protobuf bindings: `make proto`
 - Run from source via Make: `make run`
 - Run compiled binary: `./bin/erion-ember`
 - Clean artifacts: `make clean`
@@ -56,18 +59,18 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 - Direct full suite: `go test ./...`
 - Verbose suite: `make test-verbose`
 - Race detector: `make test-race`
-- One package: `go test ./internal/cache`
-- Fresh package run: `go test ./internal/cache -count=1`
-- Single test: `go test ./internal/cache -run TestNormalize -count=1`
-- Multiple tests by regex: `go test ./internal/cache -run 'TestCompress|TestNormalize' -count=1`
-- Subtest: `go test ./internal/cache -run 'TestNormalize/collapses-whitespace' -count=1`
-- Benchmarks only: `go test ./internal/cache -bench . -run '^$'`
-- Single benchmark: `go test ./internal/cache -bench BenchmarkNormalizer -run '^$'`
-- When touching hot-path cache logic, run targeted package tests first, then `go test ./...`.
+- One package: `go test ./internal/store`
+- Fresh package run: `go test ./internal/store -count=1`
+- Single store test: `go test ./internal/store -run TestStringSetGetAndOverwrite -count=1`
+- Single pubsub test: `go test ./internal/pubsub -run TestHubPublishDeliversToActiveSubscribers -count=1`
+- Single gRPC test: `go test ./internal/server -run TestGRPCServiceDataTypesAndTTL -count=1`
+- Single server integration test: `go test ./cmd/server -run TestPublicProtoClientAgainstRunningServer -count=1`
+- Multiple tests by regex: `go test ./internal/server -run 'TestGRPCServiceStringFlow|TestGRPCServiceValidation' -count=1`
+- When changing shared behavior, run focused package tests first, then `go test ./...`.
 
 ## Lint and Format
 - Format changed Go files with `gofmt -w` before finishing.
-- If imports changed and `goimports` is available, run `goimports -w` on the touched files.
+- If imports changed and `goimports` is available, run `goimports -w` on touched files.
 - Lint target: `make lint`
 - Direct lint: `golangci-lint run ./...`
 - If `golangci-lint` is unavailable, say so explicitly in the final handoff.
@@ -76,90 +79,87 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 ## Runtime and Configuration
 - Default HTTP port: `8080`
 - Default gRPC port: `9090`
-- Main env vars: `HTTP_PORT`, `GRPC_PORT`, `CACHE_SIMILARITY_THRESHOLD`, `CACHE_MAX_ELEMENTS`, `CACHE_DEFAULT_TTL`
-- `CACHE_DEFAULT_TTL` is configured in seconds and converted to `time.Duration` in startup code.
-- Keep defaults aligned across `cmd/server/main.go`, `README.md`, and `docker-compose.yml`.
+- Main env vars: `HTTP_PORT`, `GRPC_PORT`
+- HTTP is admin-only; do not add data commands back to it without an explicit task.
 - Local container startup: `docker-compose up -d`
 
-## Architecture Guidance
-- Keep HTTP handlers thin: decode, validate, delegate, encode.
+## Architecture
+- Keep HTTP handlers thin: health, readiness, metrics only.
 - Keep gRPC handlers thin: validate, delegate, translate errors.
-- Keep cache behavior, normalization, scoring, compression, TTL, and eviction logic inside `internal/cache`.
-- Preserve the current public HTTP routes, JSON field names, and gRPC method names unless the task explicitly changes the API.
-- Preserve the fast-path exact lookup before the slow-path semantic scoring flow.
-- Do not move business logic into `main.go`.
+- Keep keyspace behavior inside `internal/store`.
+- Keep pub/sub behavior inside `internal/pubsub`.
+- Keep startup and shutdown orchestration inside `cmd/server`.
+- Share one `store.Store` and one `pubsub.Hub` across transports.
 
 ## Code Style
-- Follow standard Go conventions first; this repository is intentionally conventional.
+- Follow standard Go conventions first.
 - Prefer small focused functions over broad multi-purpose helpers.
 - Prefer early returns for invalid input and error paths.
-- Use concrete structs for config, request/response payloads, and cache state.
-- Keep exported APIs compact and hide implementation details behind unexported helpers.
-- Preserve useful doc comments on exported types and functions.
-- Add comments only when logic is non-obvious, especially around scoring, TTL, concurrency, or performance tradeoffs.
+- Use concrete structs for config, store state, hub state, and payloads.
+- Keep exported APIs compact and hide repetitive details behind unexported helpers.
+- Add comments only when logic is non-obvious, especially around range normalization, TTL, or pub/sub cleanup.
 
 ## Imports
-- Use normal Go import grouping: standard library first, blank line, then module imports.
+- Use standard library imports first, blank line, then module imports.
 - Let `gofmt` or `goimports` sort imports.
 - Remove unused imports immediately.
-- Avoid alias imports unless there is a real name collision or readability gain.
+- Avoid alias imports unless there is a real collision or a clear readability gain.
 
 ## Formatting and Structure
-- `gofmt` output is the canonical style.
+- `gofmt` output is canonical.
 - Do not hand-align assignments, fields, or comments.
-- Prefer readable helpers over deep nesting.
-- Preserve concise struct definitions and straightforward constructors.
-- Keep request and response structs near the handlers that use them unless reuse becomes real.
-- Avoid unnecessary abstraction layers in this small codebase.
+- Prefer one package with a few clear files over extra abstraction layers.
+- Keep request and response structs close to their handlers unless reuse becomes real.
+- Prefer readable switches and helper functions over reflection or clever generic plumbing.
 
 ## Types and APIs
-- Use `context.Context` on public cache operations.
-- Use `time.Duration` for TTL and timing inside Go APIs.
-- Use `float32` for similarity scores to match the existing cache and scoring code.
-- Use `int64` for stats and counters where the current code already does so.
-- Prefer `(value, bool)` for cache lookups; use `error` for meaningful failure states.
-- Preserve public method shapes such as `Get`, `Set`, `Delete`, and `Stats` unless the task requires an API change.
+- Use `context.Context` on public gRPC methods.
+- Use `time.Duration` inside Go APIs for TTL and timing.
+- Use `int64` in stats and proto counters.
+- Prefer `(value, bool, error)` or `(value, error)` for store lookups where absence is not exceptional.
+- Keep gRPC method names aligned with the current proto command names.
+- Missing data should usually be represented in the response body, not as an error.
 
 ## Naming
-- Exported identifiers should use clear PascalCase names.
-- Unexported helpers should use concise camelCase names.
-- Keep receiver names short and consistent, such as `c`, `h`, or `s`.
-- Prefer domain names like `prompt`, `response`, `threshold`, `entry`, and `tokens` over vague names.
+- Exported identifiers use clear PascalCase names.
+- Unexported helpers use concise camelCase names.
+- Keep receiver names short and consistent, such as `s` for store/server and `h` for hub/handler.
+- Prefer domain names like `key`, `field`, `member`, `channel`, `payload`, `entry`, and `ttl`.
 - Tests should follow `TestXxx`; benchmarks should follow `BenchmarkXxx`.
 
 ## Error Handling
 - Return errors as the last return value.
 - Wrap underlying errors with `%w` when adding context.
-- Validate malformed client input early and return HTTP 400 from handlers.
-- Log server-side failures with `slog` before returning HTTP 500.
-- Do not ignore meaningful errors in core logic.
-- Be aware that `writeJSON` intentionally ignores encoder failure after headers are written; preserve that tradeoff unless the task specifically changes response handling.
+- Map invalid request data to `codes.InvalidArgument` in gRPC handlers.
+- Map wrong-type operations to `codes.FailedPrecondition`.
+- Treat corrupted in-memory state as `codes.Internal`.
+- Do not ignore meaningful errors in store or pub/sub code.
 
 ## Concurrency and Performance
-- Preserve locking discipline in `MetadataStore` and `Scorer`.
-- Preserve atomic counters in `SemanticCache` stats.
-- Be careful with TTL eviction, LRU refresh, and document-frequency updates; those paths must stay internally consistent.
-- Favor allocation-aware code in normalization, tokenization, compression, and scoring hot paths.
-- If you add shared mutable state, document ownership and synchronization clearly.
-- If you change scoring, cache semantics, or expiration behavior, add tests and benchmarks for the regression surface.
+- Preserve locking discipline in `store.Store` and `pubsub.Hub`.
+- Keep lock scopes short and obvious.
+- Preserve lazy expiration behavior unless the task explicitly changes it.
+- Keep pub/sub buffers bounded; do not add unbounded backlog growth.
+- Prefer simple, allocation-aware code in hot paths like list/set operations and publish fan-out.
 
 ## Testing Conventions
-- `internal/cache` tests use the external form `package cache_test`; keep that unless internal access is necessary.
-- Prefer table-driven tests for normalization, tokenization, scoring, TTL, and eviction behavior.
-- Use `t.Fatal` for setup failures and `t.Error` or `t.Errorf` for case-level assertions.
-- Add benchmark coverage for hot-path changes.
-- When changing public HTTP behavior, add handler-level coverage if practical.
+- Prefer table-driven tests when they improve readability.
+- Add targeted tests for each new command or edge case.
+- Add regression tests for wrong-type behavior, TTL behavior, and pub/sub lifecycle issues.
+- Use `t.Fatal` for setup failures and `t.Errorf` or `t.Fatalf` for assertion failures.
+- Keep tests direct and easy to explain; avoid overly smart helpers.
 
 ## Editing Checklist
-- Check whether docs also need updates in `README.md`, `CONTRIBUTING.md`, or `BENCHMARKS.md`.
-- Keep Docker, CI, and local runtime assumptions aligned if binaries, env vars, or entrypoints change.
-- Avoid adding dependencies unless they clearly improve correctness or performance.
-- Do not casually change public routes, JSON names, default config values, or wire-level behavior.
+- Check whether docs need updates in `README.md`, `docs/API_REFERENCE.md`, `docs/ARCHITECTURE.md`, or `AGENTS.md`.
+- Keep Docker and runtime assumptions aligned with `cmd/server/main.go`.
+- Avoid adding dependencies unless they clearly improve correctness or maintainability.
+- Do not casually change gRPC method names or field names in `proto/ember/v1/cache.proto`.
 - Never overwrite unrelated user changes in the working tree.
 
 ## Before Finishing
 - Run `gofmt -w` on every modified Go file.
-- Run focused tests for the touched package or packages.
+- Run focused tests for touched packages.
 - Run `go test ./...` unless the change is docs-only.
 - Run `golangci-lint run ./...` if available.
+- Run `go mod tidy` after removing dependencies or packages.
 - Report unavailable tools, skipped validation, or known follow-up work explicitly.

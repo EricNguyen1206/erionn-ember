@@ -8,15 +8,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/EricNguyen1206/erion-ember/internal/cache"
+	"github.com/EricNguyen1206/erion-ember/internal/pubsub"
 	"github.com/EricNguyen1206/erion-ember/internal/server"
+	"github.com/EricNguyen1206/erion-ember/internal/store"
 )
 
 const shutdownTimeout = 5 * time.Second
+
+type Config struct {
+	HTTPPort string
+	GRPCPort string
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -27,22 +32,22 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
-	httpAddr := ":" + getEnv("HTTP_PORT", "8080")
-	grpcAddr := ":" + getEnv("GRPC_PORT", "9090")
+	httpAddr := ":" + cfg.HTTPPort
+	grpcAddr := ":" + cfg.GRPCPort
+
+	kvStore := store.New()
+	hub := pubsub.New(16)
 
 	slog.Info("starting erion-ember",
-		"version", "3.0.0",
+		"version", "4.0.0",
 		"http_addr", httpAddr,
 		"grpc_addr", grpcAddr,
 		"http_metrics_path", "/metrics",
-		"similarity_threshold", cfg.SimilarityThreshold,
-		"max_elements", cfg.MaxElements,
-		"engine", "bm25-jaccard",
+		"mode", "grpc-data-cache",
 	)
 
-	sc := cache.New(cfg)
-	httpSrv := server.NewHTTPServer(httpAddr, sc)
-	grpcSrv, err := server.NewGRPCServer(grpcAddr, sc)
+	httpSrv := server.NewHTTPServer(httpAddr, kvStore, hub)
+	grpcSrv, err := server.NewGRPCServer(grpcAddr, kvStore, hub)
 	if err != nil {
 		return fmt.Errorf("create gRPC server: %w", err)
 	}
@@ -95,36 +100,26 @@ func run() error {
 		shutdownErr = fmt.Errorf("shutdown http server: %w", err)
 	}
 
-	stats := sc.Stats()
+	storeStats := kvStore.Stats()
+	hubStats := hub.Stats()
 	slog.Info("cache stats",
-		"total_entries", stats.TotalEntries,
-		"cache_hits", stats.CacheHits,
-		"cache_misses", stats.CacheMisses,
-		"total_queries", stats.TotalQueries,
-		"hit_rate", stats.HitRate,
+		"total_keys", storeStats.TotalKeys,
+		"string_keys", storeStats.StringKeys,
+		"hash_keys", storeStats.HashKeys,
+		"list_keys", storeStats.ListKeys,
+		"set_keys", storeStats.SetKeys,
+		"pubsub_channels", hubStats.Channels,
+		"pubsub_subscribers", hubStats.Subscribers,
 	)
 
 	return errors.Join(serveErr, shutdownErr)
 }
 
-func loadConfig() cache.Config {
-	cfg := cache.DefaultConfig()
-	if v := getEnv("CACHE_SIMILARITY_THRESHOLD", ""); v != "" {
-		if f, err := strconv.ParseFloat(v, 32); err == nil {
-			cfg.SimilarityThreshold = float32(f)
-		}
+func loadConfig() Config {
+	return Config{
+		HTTPPort: getEnv("HTTP_PORT", "8080"),
+		GRPCPort: getEnv("GRPC_PORT", "9090"),
 	}
-	if v := getEnv("CACHE_MAX_ELEMENTS", ""); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.MaxElements = n
-		}
-	}
-	if v := getEnv("CACHE_DEFAULT_TTL", ""); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.DefaultTTL = time.Duration(n) * time.Second
-		}
-	}
-	return cfg
 }
 
 func getEnv(key, fallback string) string {

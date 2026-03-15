@@ -5,6 +5,8 @@ import (
 	"net"
 	"testing"
 
+	"github.com/EricNguyen1206/erion-ember/internal/pubsub"
+	"github.com/EricNguyen1206/erion-ember/internal/store"
 	emberv1 "github.com/EricNguyen1206/erion-ember/proto/ember/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -13,56 +15,65 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func TestGRPCServiceCRUDFlow(t *testing.T) {
+func TestGRPCServiceStringFlow(t *testing.T) {
 	client, cleanup := newBufconnClient(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	setResponse, err := client.Set(ctx, &emberv1.SetRequest{
-		Prompt:   "What is Go?",
-		Response: "Go is a compiled language.",
-	})
-	if err != nil {
+	if _, err := client.Set(ctx, &emberv1.SetRequest{Key: "name", Value: "ember"}); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
-	if setResponse.Id == "" {
-		t.Fatal("expected non-empty cache id")
-	}
 
-	getResponse, err := client.Get(ctx, &emberv1.GetRequest{Prompt: "What is Go?"})
+	getResponse, err := client.Get(ctx, &emberv1.GetRequest{Key: "name"})
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if !getResponse.Hit {
-		t.Fatal("expected cache hit")
+	if !getResponse.Found {
+		t.Fatal("expected value to exist")
 	}
-	if !getResponse.ExactMatch {
-		t.Fatal("expected exact match")
+	if getResponse.Value != "ember" {
+		t.Fatalf("got value %q, want %q", getResponse.Value, "ember")
+	}
+
+	existsResponse, err := client.Exists(ctx, &emberv1.ExistsRequest{Key: "name"})
+	if err != nil {
+		t.Fatalf("Exists failed: %v", err)
+	}
+	if !existsResponse.Exists {
+		t.Fatal("expected key to exist")
+	}
+
+	typeResponse, err := client.Type(ctx, &emberv1.TypeRequest{Key: "name"})
+	if err != nil {
+		t.Fatalf("Type failed: %v", err)
+	}
+	if typeResponse.Type != "string" {
+		t.Fatalf("got type %q, want %q", typeResponse.Type, "string")
 	}
 
 	statsResponse, err := client.Stats(ctx, &emberv1.StatsRequest{})
 	if err != nil {
 		t.Fatalf("Stats failed: %v", err)
 	}
-	if statsResponse.TotalEntries != 1 {
-		t.Fatalf("got %d entries, want 1", statsResponse.TotalEntries)
+	if statsResponse.TotalKeys != 1 {
+		t.Fatalf("got %d keys, want 1", statsResponse.TotalKeys)
 	}
 
-	deleteResponse, err := client.Delete(ctx, &emberv1.DeleteRequest{Prompt: "What is Go?"})
+	delResponse, err := client.Del(ctx, &emberv1.DelRequest{Key: "name"})
 	if err != nil {
-		t.Fatalf("Delete failed: %v", err)
+		t.Fatalf("Del failed: %v", err)
 	}
-	if !deleteResponse.Deleted {
+	if !delResponse.Deleted {
 		t.Fatal("expected delete success")
 	}
 
-	getResponse, err = client.Get(ctx, &emberv1.GetRequest{Prompt: "What is Go?"})
+	getResponse, err = client.Get(ctx, &emberv1.GetRequest{Key: "name"})
 	if err != nil {
 		t.Fatalf("Get after delete failed: %v", err)
 	}
-	if getResponse.Hit {
-		t.Fatal("expected miss after delete")
+	if getResponse.Found {
+		t.Fatal("expected key to be missing after delete")
 	}
 
 	healthResponse, err := client.Health(ctx, &emberv1.HealthRequest{})
@@ -78,12 +89,17 @@ func TestGRPCServiceValidation(t *testing.T) {
 	client, cleanup := newBufconnClient(t)
 	defer cleanup()
 
-	_, err := client.Set(context.Background(), &emberv1.SetRequest{Prompt: " ", Response: "value"})
+	_, err := client.Set(context.Background(), &emberv1.SetRequest{Key: " ", Value: "value"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("got code %s, want %s", status.Code(err), codes.InvalidArgument)
 	}
 
-	_, err = client.Set(context.Background(), &emberv1.SetRequest{Prompt: "prompt", Response: "value", TtlSeconds: -1})
+	_, err = client.Set(context.Background(), &emberv1.SetRequest{Key: "key", Value: "value", TtlSeconds: -1})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("got code %s, want %s", status.Code(err), codes.InvalidArgument)
+	}
+
+	_, err = client.HSet(context.Background(), &emberv1.HSetRequest{Key: "hash", Fields: nil})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("got code %s, want %s", status.Code(err), codes.InvalidArgument)
 	}
@@ -103,7 +119,7 @@ func TestGRPCServiceHealthReportsReadiness(t *testing.T) {
 }
 
 func TestGRPCServiceHealthRequiresInitializedCache(t *testing.T) {
-	service := &semanticCacheService{}
+	service := &cacheService{}
 
 	_, err := service.Health(context.Background(), &emberv1.HealthRequest{})
 	if status.Code(err) != codes.Unavailable {
@@ -112,20 +128,20 @@ func TestGRPCServiceHealthRequiresInitializedCache(t *testing.T) {
 }
 
 func TestGRPCServiceGetRequiresInitializedCache(t *testing.T) {
-	service := &semanticCacheService{}
+	service := &cacheService{}
 
-	_, err := service.Get(context.Background(), &emberv1.GetRequest{Prompt: "What is Go?"})
+	_, err := service.Get(context.Background(), &emberv1.GetRequest{Key: "name"})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("got code %s, want %s", status.Code(err), codes.Unavailable)
 	}
 }
 
-func newBufconnClient(t *testing.T) (emberv1.SemanticCacheServiceClient, func()) {
+func newBufconnClient(t *testing.T) (emberv1.CacheServiceClient, func()) {
 	t.Helper()
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	emberv1.RegisterSemanticCacheServiceServer(grpcServer, &semanticCacheService{cache: newServerTestCache()})
+	emberv1.RegisterCacheServiceServer(grpcServer, &cacheService{store: store.New(), hub: pubsub.New(4)})
 
 	go func() {
 		_ = grpcServer.Serve(listener)
@@ -152,5 +168,5 @@ func newBufconnClient(t *testing.T) (emberv1.SemanticCacheServiceClient, func())
 		_ = listener.Close()
 	}
 
-	return emberv1.NewSemanticCacheServiceClient(conn), cleanup
+	return emberv1.NewCacheServiceClient(conn), cleanup
 }

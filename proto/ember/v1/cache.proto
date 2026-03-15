@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package ember.v1;
+
+option go_package = "github.com/EricNguyen1206/erion-ember/proto/ember/v1;emberv1";
+
+service CacheService {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Set(SetRequest) returns (SetResponse);
+  rpc Del(DelRequest) returns (DelResponse);
+  rpc Exists(ExistsRequest) returns (ExistsResponse);
+  rpc Type(TypeRequest) returns (TypeResponse);
+  rpc Expire(ExpireRequest) returns (ExpireResponse);
+  rpc Ttl(TtlRequest) returns (TtlResponse);
+  rpc HSet(HSetRequest) returns (HSetResponse);
+  rpc HGet(HGetRequest) returns (HGetResponse);
+  rpc HDel(HDelRequest) returns (HDelResponse);
+  rpc HGetAll(HGetAllRequest) returns (HGetAllResponse);
+  rpc LPush(LPushRequest) returns (LPushResponse);
+  rpc RPush(RPushRequest) returns (RPushResponse);
+  rpc LPop(LPopRequest) returns (LPopResponse);
+  rpc RPop(RPopRequest) returns (RPopResponse);
+  rpc LRange(LRangeRequest) returns (LRangeResponse);
+  rpc SAdd(SAddRequest) returns (SAddResponse);
+  rpc SRem(SRemRequest) returns (SRemResponse);
+  rpc SMembers(SMembersRequest) returns (SMembersResponse);
+  rpc SIsMember(SIsMemberRequest) returns (SIsMemberResponse);
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeMessage);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bool found = 1;
+  string value = 2;
+}
+
+message SetRequest {
+  string key = 1;
+  string value = 2;
+  int64 ttl_seconds = 3;
+}
+
+message SetResponse {}
+
+message DelRequest {
+  string key = 1;
+}
+
+message DelResponse {
+  bool deleted = 1;
+}
+
+message ExistsRequest {
+  string key = 1;
+}
+
+message ExistsResponse {
+  bool exists = 1;
+}
+
+message TypeRequest {
+  string key = 1;
+}
+
+message TypeResponse {
+  string type = 1;
+}
+
+message ExpireRequest {
+  string key = 1;
+  int64 ttl_seconds = 2;
+}
+
+message ExpireResponse {
+  bool updated = 1;
+}
+
+message TtlRequest {
+  string key = 1;
+}
+
+message TtlResponse {
+  bool found = 1;
+  bool has_expiration = 2;
+  int64 ttl_seconds = 3;
+}
+
+message HSetRequest {
+  string key = 1;
+  map<string, string> fields = 2;
+}
+
+message HSetResponse {
+  int64 added = 1;
+}
+
+message HGetRequest {
+  string key = 1;
+  string field = 2;
+}
+
+message HGetResponse {
+  bool found = 1;
+  string value = 2;
+}
+
+message HDelRequest {
+  string key = 1;
+  repeated string fields = 2;
+}
+
+message HDelResponse {
+  int64 removed = 1;
+}
+
+message HGetAllRequest {
+  string key = 1;
+}
+
+message HGetAllResponse {
+  bool found = 1;
+  map<string, string> fields = 2;
+}
+
+message LPushRequest {
+  string key = 1;
+  repeated string values = 2;
+}
+
+message LPushResponse {
+  int64 length = 1;
+}
+
+message RPushRequest {
+  string key = 1;
+  repeated string values = 2;
+}
+
+message RPushResponse {
+  int64 length = 1;
+}
+
+message LPopRequest {
+  string key = 1;
+}
+
+message LPopResponse {
+  bool found = 1;
+  string value = 2;
+}
+
+message RPopRequest {
+  string key = 1;
+}
+
+message RPopResponse {
+  bool found = 1;
+  string value = 2;
+}
+
+message LRangeRequest {
+  string key = 1;
+  int64 start = 2;
+  int64 stop = 3;
+}
+
+message LRangeResponse {
+  bool found = 1;
+  repeated string values = 2;
+}
+
+message SAddRequest {
+  string key = 1;
+  repeated string members = 2;
+}
+
+message SAddResponse {
+  int64 added = 1;
+}
+
+message SRemRequest {
+  string key = 1;
+  repeated string members = 2;
+}
+
+message SRemResponse {
+  int64 removed = 1;
+}
+
+message SMembersRequest {
+  string key = 1;
+}
+
+message SMembersResponse {
+  bool found = 1;
+  repeated string members = 2;
+}
+
+message SIsMemberRequest {
+  string key = 1;
+  string member = 2;
+}
+
+message SIsMemberResponse {
+  bool is_member = 1;
+}
+
+message PublishRequest {
+  string channel = 1;
+  bytes payload = 2;
+}
+
+message PublishResponse {
+  int64 delivered = 1;
+}
+
+message SubscribeRequest {
+  repeated string channels = 1;
+}
+
+message SubscribeMessage {
+  string channel = 1;
+  bytes payload = 2;
+  int64 published_at_unix = 3;
+}
+
+message StatsRequest {}
+
+message StatsResponse {
+  int64 total_keys = 1;
+  int64 string_keys = 2;
+  int64 hash_keys = 3;
+  int64 list_keys = 4;
+  int64 set_keys = 5;
+  int64 channels = 6;
+  int64 subscribers = 7;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}

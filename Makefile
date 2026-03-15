@@ -1,4 +1,4 @@
-.PHONY: build test clean run lint test-verbose test-race docker-build release-validate
+.PHONY: build test clean run lint test-verbose test-race proto docker-build release-validate
 
 BIN := bin/erion-ember
 
@@ -29,6 +29,15 @@ clean:
 ## lint: run golangci-lint
 lint:
 	golangci-lint run ./...
+
+## proto: generate protobuf bindings
+proto:
+	protoc \
+	  --go_out=. \
+	  --go_opt=paths=source_relative \
+	  --go-grpc_out=. \
+	  --go-grpc_opt=paths=source_relative \
+	  proto/ember/v1/cache.proto
 
 ## docker-build: build the container image locally
 docker-build:
