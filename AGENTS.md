@@ -5,7 +5,7 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 ## Purpose
 - This file is the operating manual for agentic coding tools in this repository.
 - Use it alongside the code, `README.md`, `Makefile`, and the docs in `docs/`.
-- Prefer the current Go implementation over assumptions from generic Redis clones or old semantic-cache history.
+- Prefer the current Go implementation over assumptions from generic cache templates or stale repo history.
 
 ## Project Snapshot
 - Language: Go
@@ -27,7 +27,7 @@ Guidance for coding agents working in `/Users/ericnguyen/DATA/Workspace/Backend/
 ## Source of Truth
 - Trust the Go code first, then `README.md`, `docs/API_REFERENCE.md`, `docs/ARCHITECTURE.md`, and `Makefile`.
 - Keep the repository focused on the cache server.
-- Do not reintroduce semantic-cache logic, RESP parsing, or HTTP data routes.
+- Do not reintroduce old cache experiments, RESP parsing, or HTTP data routes.
 
 ## Repository Map
 - `cmd/server/main.go`: config loading, startup, shutdown, shared dependency wiring
