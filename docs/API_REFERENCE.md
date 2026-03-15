@@ -1,217 +1,128 @@
-# Erion Ember API Reference
+# API Reference
 
-![Erion Ember Logo](../assets/logo-horizontal.svg)
+## gRPC
 
-Release 1 exposes the same self-hosted, single-node, memory-only semantic cache for chat backends over gRPC and HTTP. Prefer gRPC for backend integration; use HTTP when JSON is the simpler fit for your environment. The cache checks exact prompt matches first and then falls back to lexical similarity scoring with BM25 + Jaccard.
+Proto source: `proto/ember/v1/cache.proto`
 
-## Quickstart Links
+Service: `ember.v1.CacheService`
 
-- Public proto: `proto/ember/v1/semantic_cache.proto`
-- Go raw examples: `examples/go/raw-grpc-chat/main.go` and `examples/go/raw-http-chat/main.go`
-- Node raw examples: `examples/node/raw-grpc-chat/index.js` and `examples/node/raw-http-chat/index.js`
-- Showcase demo: `examples/showcase/README.md`
-- Production scope: self-hosted, single-node, memory-only
+### Generic Commands
 
-## Preferred gRPC API
+- `Del(DelRequest) -> DelResponse`
+  - Request: `key`
+  - Response: `deleted`
 
-Proto definition: `proto/ember/v1/semantic_cache.proto`
+- `Exists(ExistsRequest) -> ExistsResponse`
+  - Request: `key`
+  - Response: `exists`
 
-Service: `ember.v1.SemanticCacheService`
+- `Type(TypeRequest) -> TypeResponse`
+  - Request: `key`
+  - Response: `type` in `none|string|hash|list|set`
 
-| RPC | Request | Response | Notes |
-|-----|---------|----------|-------|
-| `Get` | `GetRequest` | `GetResponse` | Exact match first, then lexical fallback if needed. |
-| `Set` | `SetRequest` | `SetResponse` | Stores a prompt/response pair in memory. |
-| `Delete` | `DeleteRequest` | `DeleteResponse` | Removes an entry by prompt. |
-| `Stats` | `StatsRequest` | `StatsResponse` | Returns cache counters and hit rate. |
-| `Health` | `HealthRequest` | `HealthResponse` | Returns readiness status for the gRPC service. |
+- `Expire(ExpireRequest) -> ExpireResponse`
+  - Request: `key`, `ttl_seconds`
+  - Response: `updated`
 
-Release 1 does not include SDKs. Use the raw Go and Node examples in `examples/` as copy-pasteable integration starting points.
+- `Ttl(TtlRequest) -> TtlResponse`
+  - Request: `key`
+  - Response: `found`, `has_expiration`, `ttl_seconds`
 
-### Example Response
+- `Stats(StatsRequest) -> StatsResponse`
+  - Response fields: `total_keys`, `string_keys`, `hash_keys`, `list_keys`, `set_keys`, `channels`, `subscribers`
 
-```json
-{
-  "status": "ready"
-}
-```
+- `Health(HealthRequest) -> HealthResponse`
+  - Response: `status`
 
-## HTTP API
+### Strings
 
-HTTP request bodies use `application/json`. Most HTTP responses also use `application/json`, except `GET /metrics`, which returns Prometheus-style text with `text/plain; version=0.0.4`.
+- `Get(GetRequest) -> GetResponse`
+  - Request: `key`
+  - Response: `found`, `value`
 
-Release 1 keeps HTTP for compatibility and debugging, but gRPC is the preferred transport for backend-to-backend use.
+- `Set(SetRequest) -> SetResponse`
+  - Request: `key`, `value`, optional `ttl_seconds`
 
-HTTP JSON request bodies are capped at 8 MiB. Larger backend payloads should use gRPC instead of HTTP.
+### Hashes
 
-## `POST /v1/cache/get`
+- `HSet(HSetRequest) -> HSetResponse`
+  - Request: `key`, `fields`
+  - Response: `added`
 
-Retrieve a response from the cache. The server attempts an exact prompt match first and only runs the lexical fallback when needed.
+- `HGet(HGetRequest) -> HGetResponse`
+  - Request: `key`, `field`
+  - Response: `found`, `value`
 
-### Parameters
+- `HDel(HDelRequest) -> HDelResponse`
+  - Request: `key`, `fields`
+  - Response: `removed`
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `prompt` | string | Yes | The query string to look up. |
-| `similarity_threshold` | float | No | Override global similarity threshold (0.0–1.0) for lexical fallback. |
+- `HGetAll(HGetAllRequest) -> HGetAllResponse`
+  - Request: `key`
+  - Response: `found`, `fields`
 
-### Example Request
+### Lists
 
-```bash
-curl -XPOST http://localhost:8080/v1/cache/get \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt": "What is Go?", "similarity_threshold": 0.85}'
-```
+- `LPush(LPushRequest) -> LPushResponse`
+- `RPush(RPushRequest) -> RPushResponse`
+  - Request: `key`, `values`
+  - Response: `length`
 
-### Example Success Response (Exact Hit)
+- `LPop(LPopRequest) -> LPopResponse`
+- `RPop(RPopRequest) -> RPopResponse`
+  - Request: `key`
+  - Response: `found`, `value`
 
-```json
-{
-  "hit": true,
-  "response": "Go is a compiled, statically typed language.",
-  "similarity": 1,
-  "exact_match": true
-}
-```
+- `LRange(LRangeRequest) -> LRangeResponse`
+  - Request: `key`, `start`, `stop`
+  - Response: `found`, `values`
+  - Range is inclusive and supports negative indexes
 
-### Example Success Response (Miss)
+### Sets
 
-```json
-{
-  "hit": false,
-  "similarity": 0,
-  "exact_match": false
-}
-```
+- `SAdd(SAddRequest) -> SAddResponse`
+  - Request: `key`, `members`
+  - Response: `added`
 
-### Errors
+- `SRem(SRemRequest) -> SRemResponse`
+  - Request: `key`, `members`
+  - Response: `removed`
 
-| Code | Description | Solution |
-|------|-------------|----------|
-| `400` | Bad Request | Ensure `prompt` is provided in the JSON body. |
-| `413` | Request Entity Too Large | Keep HTTP JSON payloads under 8 MiB or switch to gRPC. |
-| `405` | Method Not Allowed | Ensure you are using `POST`. |
+- `SMembers(SMembersRequest) -> SMembersResponse`
+  - Request: `key`
+  - Response: `found`, `members`
 
----
+- `SIsMember(SIsMemberRequest) -> SIsMemberResponse`
+  - Request: `key`, `member`
+  - Response: `is_member`
 
-## `POST /v1/cache/set`
+### Pub/Sub
 
-Store a prompt/response pair in the cache.
+- `Publish(PublishRequest) -> PublishResponse`
+  - Request: `channel`, `payload`
+  - Response: `delivered`
 
-### Parameters
+- `Subscribe(SubscribeRequest) -> stream SubscribeMessage`
+  - Request: `channels`
+  - Stream message fields: `channel`, `payload`, `published_at_unix`
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `prompt` | string | Yes | The prompt used for future lookups. |
-| `response` | string | Yes | The text response to be cached. |
-| `ttl` | int | No | Time-to-live in seconds (0 = default). |
+## Error Mapping
 
-### Example Request
+- Invalid request data -> `codes.InvalidArgument`
+- Wrong type for key -> `codes.FailedPrecondition`
+- Corrupt in-memory value -> `codes.Internal`
 
-```bash
-curl -XPOST http://localhost:8080/v1/cache/set \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt": "What is Go?", "response": "Go is a compiled language.", "ttl": 3600}'
-```
+Missing data is usually represented in the response body rather than as an error:
 
-### Example Response
+- `Get`, `HGet`, `LPop`, `RPop` use `found=false`
+- `SMembers` and `HGetAll` use `found=false`
+- `SIsMember` returns `is_member=false`
+- `Type` returns `none`
 
-```json
-{
-  "id": "1"
-}
-```
+## HTTP Admin Endpoints
 
-If `ttl` is omitted or set to `0`, the server uses `CACHE_DEFAULT_TTL`.
+- `GET /health`
+- `GET /ready`
+- `GET /metrics`
 
----
-
-## `POST /v1/cache/delete`
-
-Remove an entry from the cache by its original prompt.
-
-### Parameters
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `prompt` | string | Yes | The exact prompt of the entry to delete. |
-
-### Example Request
-
-```bash
-curl -XPOST http://localhost:8080/v1/cache/delete \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt": "What is Go?"}'
-```
-
-### Example Response
-
-```json
-{
-  "deleted": true
-}
-```
-
----
-
-## `GET /v1/stats`
-
-Get current cache performance statistics.
-
-### Example Response
-
-```json
-{
-  "total_entries": 1024,
-  "cache_hits": 8345,
-  "cache_misses": 2103,
-  "total_queries": 10448,
-  "hit_rate": 0.7988
-}
-```
-
----
-
-## `GET /health`
-
-Basic health check for the service.
-
-This reports process health only. Release 1 has no persistence layer or cluster membership to verify.
-
-### Example Response
-
-```json
-{
-  "status": "ok"
-}
-```
-
----
-
-## `GET /ready`
-
-Readiness check for the in-memory service.
-
-### Example Response
-
-```json
-{
-  "status": "ready"
-}
-```
-
----
-
-## `GET /metrics`
-
-Prometheus-style metrics for HTTP traffic and cache behavior.
-
-### Example Output
-
-```text
-erion_ember_cache_entries 1
-erion_ember_cache_hits_total 1
-erion_ember_cache_misses_total 1
-erion_ember_cache_queries_total 2
-erion_ember_cache_hit_rate 0.5
-```
+HTTP is intentionally not a data API in this version.

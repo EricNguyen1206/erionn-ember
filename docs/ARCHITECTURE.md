@@ -1,99 +1,97 @@
-# Architecture — Erion Ember v3
+# Architecture
 
-![Erion Ember Logo](../assets/logo-horizontal.svg)
+Single-process Go service with one shared in-memory keyspace and one shared pub/sub hub.
 
-Erion Ember is a standalone Go binary providing semantic caching via a REST/JSON API. It is designed for simplicity, performance, and ease of deployment.
+## Pieces
 
-## Architectural Principles
+- gRPC for data commands
+- HTTP for health and metrics
+- one `store.Store` for strings, hashes, lists, sets, and TTL
+- one `pubsub.Hub` for channel subscriptions and fan-out
 
-- **Simplicity**: Single binary, zero external dependencies.
-- **Performance**: Two-tier matching (Fast & Slow paths) ensures sub-microsecond response times for identical queries.
-- **Efficiency**: Memory-safe implementation with transparent LZ4 compression.
-- **Robustness**: Incremental IDF updates ensure similarity matching improves as the cache grows.
+## Components
 
-## System Components
+### `cmd/server`
 
-```mermaid
-graph TD
-    Client[Client Application] --> Server[HTTP Server :8080]
-    Server --> Cache[SemanticCache Orchestrator]
-    Cache --> Norm[Normalizer / xxhash]
-    Cache --> Comp[LZ4 Compressor]
-    Cache --> Store[MetadataStore LRU]
-    Cache --> Scorer[BM25 + Jaccard Scorer]
+- loads `HTTP_PORT` and `GRPC_PORT`
+- creates the shared store and pub/sub hub
+- starts HTTP and gRPC servers
+- handles graceful shutdown
 
-    style Cache fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
-    style Scorer fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
-    style Server fill:#262626,stroke:#171717,color:#fff
-    style Client fill:#fff,stroke:#e5e7eb,color:#262626
-    style Store fill:#fffbeb,stroke:#92400e,color:#92400e
-```
+### `internal/server/grpc.go`
 
-### 1. SemanticCache (Orchestrator)
-The central component that coordinates text normalization, hash lookup (fast path), and similarity scanning (slow path).
+- validates requests
+- translates store errors into gRPC status codes
+- maps one RPC to one clear store or pub/sub operation
+- keeps transport logic thin
 
-### 2. Normalizer & xxhash
-Standardizes input text (lowercase, whitespace collapse) and computes a 64-bit hash for O(1) exact match lookups.
+### `internal/server/http.go`
 
-### 3. BM25 + Jaccard Hybrid Scorer
-Computes similarity between tokens. BM25 provides statistical weight to important terms, while Jaccard ensures overlap sensitivity.
+- serves `/health`, `/ready`, and `/metrics`
+- keeps request metrics for admin visibility
+- does not expose data commands
 
-### 4. MetadataStore (LRU)
-A thread-safe in-memory store using a hash map for lookups and a doubly-linked list for Least Recently Used (LRU) eviction.
+### `internal/store`
 
-## Request Flow
+- owns the keyspace `map[string]*Entry`
+- stores key type, value, timestamps, and optional expiration
+- implements generic key operations plus datatype-specific commands
+- lazily removes expired keys when touched
 
-### Fast Path (Exact Match)
-1. **Normalize**: Clean input string.
-2. **Hash**: Generate `xxhash`.
-3. **Lookup**: Check `MetadataStore` by hash.
-4. **Return**: On hit, decompress response and return immediately (~0.1 µs).
+### `internal/pubsub`
 
-### Slow Path (Semantic Similarity)
-1. **Miss**: If fast path misses, tokenize the normalized prompt.
-2. **Scan**: Iterate through `MetadataStore` entries.
-3. **Score**: Run hybrid scorer against candidates.
-4. **Threshold**: If highest score ≥ threshold, return hit; otherwise, return miss.
+- tracks subscribers by channel
+- publishes only to currently connected subscribers
+- drops slow subscribers when their buffer is full
 
 ## Data Model
 
-The `Entry` struct is the primary unit of storage:
+Each key is stored as an `Entry` with:
 
-```go
-type Entry struct {
-    ID                   string
-    PromptHash           uint64        // xxhash of cleaned prompt
-    Tokens               []string      // For similarity scan
-    NormalizedPrompt     string
-    CompressedPrompt     []byte        // LZ4 compressed
-    CompressedResponse   []byte        // LZ4 compressed
-    OriginalResponseSize int
-    CreatedAt            time.Time
-}
-```
+- `Key`
+- `Type`
+- `Value`
+- `ExpiresAt`
+- `CreatedAt`
+- `UpdatedAt`
 
-## Performance Scaling
+Supported value shapes:
 
-The slow path latency scales linearly with cache size:
+- string -> `string`
+- hash -> `map[string]string`
+- list -> `[]string`
+- set -> `map[string]struct{}`
 
-| Cache Size | Latency |
-|------------|---------|
-| 1K entries | ~10 µs |
-| 10K entries | ~100 µs |
-| 100K entries | ~1 ms |
+## Request Flow
 
-For deployments exceeding 1 million entries, we recommend sharding or introducing a vector database back-end.
+### String read
 
----
+1. Client sends `Get(key)` over gRPC
+2. gRPC handler validates the key
+3. Handler calls `store.GetString(key)`
+4. Store checks expiration, type, and value
+5. Handler returns `found/value`
 
-## Visual Identity & Design Tokens
+### Pub/sub
 
-Erion Ember follows a cohesive brand identity inspired by the "Ember" visual metaphor.
+1. Client opens `Subscribe(channels)` stream
+2. Server registers a subscriber in the hub
+3. Another client calls `Publish(channel, payload)`
+4. Hub fans the message out to active subscribers only
+5. gRPC stream sends `SubscribeMessage`
 
-| Token | Value | Description |
-|-------|-------|-------------|
-| **Primary** | `#f59e0b` | The core radiant amber color. |
-| **Foundation** | `#262626` | Deep charcoal for technical stability. |
-| **Typography** | `Inter` | High-performance sans-serif for UI. |
+## Concurrency
 
-Full branding specifications can be found in [IDENTITY_GUIDE.md](../assets/IDENTITY_GUIDE.md).
+- `store.Store` uses a mutex around keyspace mutation and lazy expiration
+- `pubsub.Hub` uses its own mutex for subscription bookkeeping
+- slow subscribers are removed instead of buffering unbounded data
+
+## Operational Shape
+
+- single node
+- memory only
+- no persistence
+- no auth
+- no RESP compatibility layer
+
+That is the whole runtime model.

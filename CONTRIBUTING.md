@@ -1,51 +1,46 @@
 # Contributing to Erion Ember
 
-![Erion Ember Logo](assets/logo-horizontal.svg)
+## Local Setup
 
-Welcome! We're glad you're interested in contributing to Erion Ember. These guidelines will help you get started with the codebase and our development workflow.
-
-## Local Development Setup
-
-### Prerequisites
-- **Go 1.23+**
-- **Docker** (for integration tests)
-- **golangci-lint** (optional, but recommended)
-
-### Step 1: Clone and Build
 ```bash
 git clone https://github.com/EricNguyen1206/erion-ember
 cd erion-ember
 make build
 ```
 
-### Step 2: Running Tests
-We maintain high test coverage for core logic. Always run tests before submitting a PR.
-```bash
-# Run all tests
-make test
+Useful development commands:
 
-# Run tests with race detector
+```bash
+make test
 make test-race
+make lint
+make proto
 ```
 
-## Repository Structure
+## Project Structure
 
-- `cmd/server/`: The entry point for the HTTP and gRPC services.
-- `internal/cache/`: Core caching logic, scoring algorithms, and storage.
-- `internal/server/`: HTTP and gRPC handler implementation.
+- `cmd/server/` - process startup and shutdown
+- `internal/server/` - gRPC handlers and HTTP admin endpoints
+- `internal/store/` - keyspace and datatype commands
+- `internal/pubsub/` - subscription registry and message fan-out
+- `proto/ember/v1/` - public gRPC contract
 
-## Development Workflow
+## Workflow
 
-1. **Fork and Branch**: Create a feature branch from `main`.
-2. **Follow Style**: Follow standard Go conventions and see [AGENTS.md](AGENTS.md) for project-specific rules.
-3. **Commit Messages**: Use descriptive commit messages (e.g., `feat: add BM25 scoring`).
-4. **Pull Requests**: Open a PR with a clear description of your changes and ensure all CI checks pass.
+1. Create a feature branch.
+2. Add or update tests first.
+3. Keep HTTP admin-only unless the task explicitly changes that.
+4. Run focused tests, then `go test ./...`.
+5. Run `gofmt -w` on changed Go files.
+6. Run `golangci-lint run ./...` if available.
 
-## Coding Standards
+## Style Notes
 
-- **Error Handling**: Return errors as the last value; never ignore them.
-- **Concurrency**: Use the provided `MetadataStore` locking patterns for thread-safe state.
-- **Benchmarks**: If adding performance-critical code, include benchmarks and update [BENCHMARKS.md](BENCHMARKS.md).
+- Prefer clear, direct Go over abstraction-heavy designs.
+- Keep handlers thin and put business logic in `internal/store` or `internal/pubsub`.
+- Use gRPC status codes consistently:
+  - `InvalidArgument` for bad input
+  - `FailedPrecondition` for wrong-type operations
+  - `Internal` for unexpected server-side corruption or failures
 
-## Questions?
-Open an issue or contact the maintainers. We're happy to help!
+See `AGENTS.md` for the repository-specific coding rules used by coding agents.

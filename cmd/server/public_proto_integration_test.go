@@ -52,27 +52,21 @@ func TestPublicProtoClientAgainstRunningServer(t *testing.T) {
 	}
 	defer conn.Close()
 
-	client := emberv1.NewSemanticCacheServiceClient(conn)
+	client := emberv1.NewCacheServiceClient(conn)
 	grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer grpcCancel()
 
-	setResp, err := client.Set(grpcCtx, &emberv1.SetRequest{
-		Prompt:   "What is Go?",
-		Response: "Go is a compiled language.",
-	})
+	_, err = client.Set(grpcCtx, &emberv1.SetRequest{Key: "language:go", Value: "Go is a compiled language."})
 	if err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
-	if setResp.GetId() == "" {
-		t.Fatal("expected non-empty cache id")
-	}
 
-	getResp, err := client.Get(grpcCtx, &emberv1.GetRequest{Prompt: "What is Go?"})
+	getResp, err := client.Get(grpcCtx, &emberv1.GetRequest{Key: "language:go"})
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if !getResp.GetHit() || !getResp.GetExactMatch() {
-		t.Fatalf("expected exact hit, got hit=%t exact=%t", getResp.GetHit(), getResp.GetExactMatch())
+	if !getResp.GetFound() || getResp.GetValue() != "Go is a compiled language." {
+		t.Fatalf("expected stored value, got found=%t value=%q", getResp.GetFound(), getResp.GetValue())
 	}
 
 	healthResp, err := client.Health(grpcCtx, &emberv1.HealthRequest{})
