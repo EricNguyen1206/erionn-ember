@@ -7,7 +7,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -ldflags="-s -w" -o /bin/erion-ember ./cmd/server/
+RUN go build -ldflags="-s -w" -o /bin/erionn-ember ./cmd/server/
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates && \
@@ -19,8 +19,8 @@ ENV HTTP_PORT=8080 \
 
 WORKDIR /app
 
-COPY --from=builder /bin/erion-ember /bin/erion-ember
+COPY --from=builder /bin/erionn-ember /bin/erionn-ember
 
 EXPOSE 8080 9090
 USER ember:ember
-ENTRYPOINT ["/bin/erion-ember"]
+ENTRYPOINT ["/bin/erionn-ember"]

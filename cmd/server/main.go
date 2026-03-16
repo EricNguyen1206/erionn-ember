@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EricNguyen1206/erion-ember/internal/pubsub"
-	"github.com/EricNguyen1206/erion-ember/internal/server"
-	"github.com/EricNguyen1206/erion-ember/internal/store"
+	"github.com/EricNguyen1206/erionn-ember/internal/pubsub"
+	"github.com/EricNguyen1206/erionn-ember/internal/server"
+	"github.com/EricNguyen1206/erionn-ember/internal/store"
 )
 
 const shutdownTimeout = 5 * time.Second
@@ -38,11 +38,10 @@ func run() error {
 	kvStore := store.New()
 	hub := pubsub.New(16)
 
-	slog.Info("starting erion-ember",
+	slog.Info("starting erionn-ember",
 		"version", "4.0.0",
 		"http_addr", httpAddr,
 		"grpc_addr", grpcAddr,
-		"http_metrics_path", "/metrics",
 		"mode", "grpc-data-cache",
 	)
 

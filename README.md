@@ -23,7 +23,7 @@ run:
 
 ```bash
 make build
-./bin/erion-ember
+./bin/erionn-ember
 ```
 
 check:

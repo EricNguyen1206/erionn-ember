@@ -5,9 +5,9 @@ import (
 	"net"
 	"testing"
 
-	"github.com/EricNguyen1206/erion-ember/internal/pubsub"
-	"github.com/EricNguyen1206/erion-ember/internal/store"
-	emberv1 "github.com/EricNguyen1206/erion-ember/proto/ember/v1"
+	"github.com/EricNguyen1206/erionn-ember/internal/pubsub"
+	"github.com/EricNguyen1206/erionn-ember/internal/store"
+	emberv1 "github.com/EricNguyen1206/erionn-ember/proto/ember/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"

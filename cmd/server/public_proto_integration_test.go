@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	emberv1 "github.com/EricNguyen1206/erion-ember/proto/ember/v1"
+	emberv1 "github.com/EricNguyen1206/erionn-ember/proto/ember/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

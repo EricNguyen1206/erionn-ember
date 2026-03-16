@@ -123,6 +123,5 @@ Missing data is usually represented in the response body rather than as an error
 
 - `GET /health`
 - `GET /ready`
-- `GET /metrics`
 
 HTTP is intentionally not a data API in this version.

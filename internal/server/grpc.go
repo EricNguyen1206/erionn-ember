@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	emberv1 "github.com/EricNguyen1206/erion-ember/proto/ember/v1"
+	emberv1 "github.com/EricNguyen1206/erionn-ember/proto/ember/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/EricNguyen1206/erion-ember/internal/pubsub"
-	"github.com/EricNguyen1206/erion-ember/internal/store"
+	"github.com/EricNguyen1206/erionn-ember/internal/pubsub"
+	"github.com/EricNguyen1206/erionn-ember/internal/store"
 )
 
 type GRPCServer struct {

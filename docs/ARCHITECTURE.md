@@ -5,7 +5,7 @@ Single-process Go service with one shared in-memory keyspace and one shared pub/
 ## Pieces
 
 - gRPC for data commands
-- HTTP for health and metrics
+- HTTP for health check
 - one `store.Store` for strings, hashes, lists, sets, and TTL
 - one `pubsub.Hub` for channel subscriptions and fan-out
 
@@ -27,8 +27,7 @@ Single-process Go service with one shared in-memory keyspace and one shared pub/
 
 ### `internal/server/http.go`
 
-- serves `/health`, `/ready`, and `/metrics`
-- keeps request metrics for admin visibility
+- serves `/health`, `/ready`
 - does not expose data commands
 
 ### `internal/store`

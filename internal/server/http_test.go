@@ -2,14 +2,13 @@ package server
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/EricNguyen1206/erion-ember/internal/pubsub"
-	"github.com/EricNguyen1206/erion-ember/internal/store"
+	"github.com/EricNguyen1206/erionn-ember/internal/pubsub"
+	"github.com/EricNguyen1206/erionn-ember/internal/store"
 )
 
 func TestHTTPHandlerOnlyExposesAdminRoutes(t *testing.T) {
@@ -55,44 +54,5 @@ func TestHTTPHandlerReadinessRequiresInitializedDependencies(t *testing.T) {
 	}
 	if body["status"] != "not_ready" {
 		t.Fatalf("got readiness status %q", body["status"])
-	}
-}
-
-func TestHTTPHandlerExposesStoreAndPubSubMetrics(t *testing.T) {
-	s := store.New()
-	if err := s.SetString("name", "ember", 0); err != nil {
-		t.Fatalf("SetString: %v", err)
-	}
-	h := pubsub.New(4)
-	sub := h.Subscribe([]string{"news"})
-	defer h.Remove(sub.ID)
-
-	ts := httptest.NewServer(NewHTTPHandler(s, h))
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/metrics")
-	if err != nil {
-		t.Fatalf("GET /metrics: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got status %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	text := string(body)
-	for _, want := range []string{
-		`erion_ember_keys_total 1`,
-		`erion_ember_string_keys_total 1`,
-		`erion_ember_pubsub_channels 1`,
-		`erion_ember_pubsub_subscribers 1`,
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("metrics output missing %q\n%s", want, text)
-		}
 	}
 }

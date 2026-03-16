@@ -7,11 +7,12 @@
 package emberv1
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -2525,7 +2526,7 @@ const file_proto_ember_v1_cache_proto_rawDesc = "" +
 	"\aPublish\x12\x18.ember.v1.PublishRequest\x1a\x19.ember.v1.PublishResponse\x12E\n" +
 	"\tSubscribe\x12\x1a.ember.v1.SubscribeRequest\x1a\x1a.ember.v1.SubscribeMessage0\x01\x128\n" +
 	"\x05Stats\x12\x16.ember.v1.StatsRequest\x1a\x17.ember.v1.StatsResponse\x12;\n" +
-	"\x06Health\x12\x17.ember.v1.HealthRequest\x1a\x18.ember.v1.HealthResponseB>Z<github.com/EricNguyen1206/erion-ember/proto/ember/v1;emberv1b\x06proto3"
+	"\x06Health\x12\x17.ember.v1.HealthRequest\x1a\x18.ember.v1.HealthResponseB>Z<github.com/EricNguyen1206/erionn-ember/proto/ember/v1;emberv1b\x06proto3"
 
 var (
 	file_proto_ember_v1_cache_proto_rawDescOnce sync.Once

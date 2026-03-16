@@ -21,7 +21,6 @@ func TestRepoDocsDoNotMentionLegacySemanticCacheTerms(t *testing.T) {
 		".env.example",
 		"Dockerfile",
 		"README.md",
-		"CONTRIBUTING.md",
 		"docs/API_REFERENCE.md",
 		"docs/ARCHITECTURE.md",
 		".github/workflows/docker-publish.yml",

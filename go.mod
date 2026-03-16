@@ -1,4 +1,4 @@
-module github.com/EricNguyen1206/erion-ember
+module github.com/EricNguyen1206/erionn-ember
 
 go 1.23.4
 
