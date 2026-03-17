@@ -119,9 +119,12 @@ Missing data is usually represented in the response body rather than as an error
 - `SIsMember` returns `is_member=false`
 - `Type` returns `none`
 
-## HTTP Admin Endpoints
+## Standard gRPC Health Check
 
-- `GET /health`
-- `GET /ready`
+Ember implements the standard `grpc.health.v1.Health` service natively.
 
-HTTP is intentionally not a data API in this version.
+You can verify the server health using standard tooling like `grpc_health_probe`:
+
+```bash
+grpc_health_probe -addr=localhost:9090
+```

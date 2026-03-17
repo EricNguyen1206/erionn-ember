@@ -16,7 +16,6 @@ does not have:
 - resp
 
 ports:
-- http `8080`
 - grpc `9090`
 
 run:
@@ -24,20 +23,6 @@ run:
 ```bash
 make build
 ./bin/erionn-ember
-```
-
-check:
-
-```bash
-curl http://localhost:8080/health
-curl http://localhost:8080/ready
-```
-
-examples:
-
-```bash
-go run ./examples/go/raw-grpc-cache
-go run ./examples/go/raw-grpc-pubsub
 ```
 
 dev:

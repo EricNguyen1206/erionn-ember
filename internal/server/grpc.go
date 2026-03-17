@@ -11,6 +11,8 @@ import (
 	emberv1 "github.com/EricNguyen1206/erionn-ember/proto/ember/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
 	"github.com/EricNguyen1206/erionn-ember/internal/pubsub"
@@ -29,6 +31,11 @@ func NewGRPCServer(addr string, s *store.Store, h *pubsub.Hub) (*GRPCServer, err
 	}
 
 	grpcServer := grpc.NewServer()
+	
+	healthcheck := health.NewServer()
+	healthcheck.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthcheck)
+	
 	emberv1.RegisterCacheServiceServer(grpcServer, &cacheService{store: s, hub: h})
 
 	return &GRPCServer{listener: listener, server: grpcServer}, nil

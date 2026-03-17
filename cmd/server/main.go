@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,7 +18,6 @@ import (
 const shutdownTimeout = 5 * time.Second
 
 type Config struct {
-	HTTPPort string
 	GRPCPort string
 }
 
@@ -32,7 +30,6 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
-	httpAddr := ":" + cfg.HTTPPort
 	grpcAddr := ":" + cfg.GRPCPort
 
 	kvStore := store.New()
@@ -40,12 +37,10 @@ func run() error {
 
 	slog.Info("starting erionn-ember",
 		"version", "4.0.0",
-		"http_addr", httpAddr,
 		"grpc_addr", grpcAddr,
 		"mode", "grpc-data-cache",
 	)
 
-	httpSrv := server.NewHTTPServer(httpAddr, kvStore, hub)
 	grpcSrv, err := server.NewGRPCServer(grpcAddr, kvStore, hub)
 	if err != nil {
 		return fmt.Errorf("create gRPC server: %w", err)
@@ -54,14 +49,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	errCh := make(chan error, 2)
-
-	go func() {
-		slog.Info("HTTP server ready", "addr", httpAddr)
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("http server: %w", err)
-		}
-	}()
+	errCh := make(chan error, 1)
 
 	go func() {
 		slog.Info("gRPC server ready", "addr", grpcSrv.Addr().String())
@@ -95,9 +83,6 @@ func run() error {
 	}
 
 	var shutdownErr error
-	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		shutdownErr = fmt.Errorf("shutdown http server: %w", err)
-	}
 
 	storeStats := kvStore.Stats()
 	hubStats := hub.Stats()
@@ -116,7 +101,6 @@ func run() error {
 
 func loadConfig() Config {
 	return Config{
-		HTTPPort: getEnv("HTTP_PORT", "8080"),
 		GRPCPort: getEnv("GRPC_PORT", "9090"),
 	}
 }

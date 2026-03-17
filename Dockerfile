@@ -14,13 +14,12 @@ RUN apk add --no-cache ca-certificates && \
     addgroup -S ember && \
     adduser -S -G ember -h /app ember
 
-ENV HTTP_PORT=8080 \
-	GRPC_PORT=9090
+ENV GRPC_PORT=9090
 
 WORKDIR /app
 
 COPY --from=builder /bin/erionn-ember /bin/erionn-ember
 
-EXPOSE 8080 9090
+EXPOSE 9090
 USER ember:ember
 ENTRYPOINT ["/bin/erionn-ember"]

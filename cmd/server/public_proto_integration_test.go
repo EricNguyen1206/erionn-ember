@@ -2,10 +2,8 @@ package main_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +18,6 @@ import (
 func TestPublicProtoClientAgainstRunningServer(t *testing.T) {
 	t.Parallel()
 
-	httpPort := freePort(t)
 	grpcPort := freePort(t)
 	serverDir := filepath.Join(repoRoot(t), "cmd", "server")
 
@@ -30,7 +27,6 @@ func TestPublicProtoClientAgainstRunningServer(t *testing.T) {
 	cmd := exec.CommandContext(ctx, "go", "run", ".")
 	cmd.Dir = serverDir
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("HTTP_PORT=%s", httpPort),
 		fmt.Sprintf("GRPC_PORT=%s", grpcPort),
 	)
 	if err := cmd.Start(); err != nil {
@@ -41,7 +37,8 @@ func TestPublicProtoClientAgainstRunningServer(t *testing.T) {
 		_, _ = cmd.Process.Wait()
 	}()
 
-	waitForReady(t, "http://127.0.0.1:"+httpPort+"/ready")
+	// Server doesn't have an HTTP ready endpoint anymore, we sleep to wait for start
+	time.Sleep(1 * time.Second)
 
 	conn, err := grpc.NewClient(
 		"127.0.0.1:"+grpcPort,
@@ -101,25 +98,3 @@ func freePort(t *testing.T) string {
 	return fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
 }
 
-func waitForReady(t *testing.T, readyURL string) {
-	t.Helper()
-
-	client := &http.Client{Timeout: 2 * time.Second}
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(readyURL)
-		if err == nil {
-			var body struct {
-				Status string `json:"status"`
-			}
-			decodeErr := json.NewDecoder(resp.Body).Decode(&body)
-			_ = resp.Body.Close()
-			if decodeErr == nil && resp.StatusCode == http.StatusOK && body.Status == "ready" {
-				return
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	t.Fatalf("server did not become ready at %s", readyURL)
-}

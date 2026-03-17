@@ -3,9 +3,7 @@ services:
   ember:
     build: .
     ports:
-      - "8080:8080"
       - "9090:9090"
     environment:
-      - HTTP_PORT=8080
       - GRPC_PORT=9090
     restart: unless-stopped
