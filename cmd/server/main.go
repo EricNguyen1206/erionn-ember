@@ -18,7 +18,7 @@ import (
 const shutdownTimeout = 5 * time.Second
 
 type Config struct {
-	GRPCPort string
+	svrPort string
 }
 
 func main() {
@@ -30,20 +30,19 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
-	grpcAddr := ":" + cfg.GRPCPort
+	svrAddr := ":" + cfg.svrPort
 
 	kvStore := store.New()
 	hub := pubsub.New(16)
 
 	slog.Info("starting erionn-ember",
 		"version", "4.0.0",
-		"grpc_addr", grpcAddr,
-		"mode", "grpc-data-cache",
+		"mode", "svr-data-cache",
 	)
 
-	grpcSrv, err := server.NewGRPCServer(grpcAddr, kvStore, hub)
+	cacheSvr, err := server.NewServer(svrAddr, kvStore, hub)
 	if err != nil {
-		return fmt.Errorf("create gRPC server: %w", err)
+		return fmt.Errorf("create svr server: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -52,9 +51,9 @@ func run() error {
 	errCh := make(chan error, 1)
 
 	go func() {
-		slog.Info("gRPC server ready", "addr", grpcSrv.Addr().String())
-		if err := grpcSrv.Serve(); err != nil {
-			errCh <- fmt.Errorf("grpc server: %w", err)
+		slog.Info("svr server ready", "addr", cacheSvr.Addr().String())
+		if err := cacheSvr.Serve(); err != nil {
+			errCh <- fmt.Errorf("svr server: %w", err)
 		}
 	}()
 
@@ -70,16 +69,16 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	grpcStopped := make(chan struct{})
+	svrStopped := make(chan struct{})
 	go func() {
-		grpcSrv.GracefulStop()
-		close(grpcStopped)
+		cacheSvr.GracefulStop()
+		close(svrStopped)
 	}()
 
 	select {
-	case <-grpcStopped:
+	case <-svrStopped:
 	case <-shutdownCtx.Done():
-		grpcSrv.Stop()
+		cacheSvr.Stop()
 	}
 
 	var shutdownErr error
@@ -101,7 +100,7 @@ func run() error {
 
 func loadConfig() Config {
 	return Config{
-		GRPCPort: getEnv("GRPC_PORT", "9090"),
+		svrPort: getEnv("PORT", "9090"),
 	}
 }
 

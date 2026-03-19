@@ -157,6 +157,11 @@ func Encode(value interface{}, isSimpleString bool) []byte {
 	}
 }
 
+type MemKVCmd struct {
+	Cmd  string
+	Args []string
+}
+
 func ParseCmd(data []byte) (*MemKVCmd, error) {
 	value, err := Decode(data)
 	if err != nil {
