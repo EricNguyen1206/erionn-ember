@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EricNguyen1206/erionn-ember/internal/pubsub"
-	"github.com/EricNguyen1206/erionn-ember/internal/server"
-	"github.com/EricNguyen1206/erionn-ember/internal/store"
+	"gomemkv/internal/pubsub"
+	"gomemkv/internal/server"
+	"gomemkv/internal/store"
 )
 
 const shutdownTimeout = 5 * time.Second
@@ -35,7 +35,7 @@ func run() error {
 	kvStore := store.New()
 	hub := pubsub.New(16)
 
-	slog.Info("starting erionn-ember",
+	slog.Info("starting gomemkv",
 		"version", "4.0.0",
 		"mode", "svr-data-cache",
 	)

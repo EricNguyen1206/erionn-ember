@@ -1,67 +1,87 @@
-# Pub/Sub Guide (Publish-Subscribe)
+# Pub/Sub Guide
 
-Ember is **NOT JUST** an in-memory Key-Value store for computing data; it also acts as a **high-speed Message Broker** for Real-Time execution (Pub/Sub). 
-
-The Pub/Sub architecture in Ember utilizes a Fan-out mechanism via `internal/pubsub` and relies on the long-lived TCP connections of gRPC Streaming.
+gomemkv supports Redis-compatible pub/sub over TCP. Any Redis client or `redis-cli` works out of the box.
 
 ## How it Works
 
-1. **Client A** continuously listens to (Subscribes) one or more "Channels". This `TCP gRPC` connection is kept alive to receive data silently when new events occur (Push mechanism).
-2. **Channels** do not need to be created in advance / They automatically disappear depending on the number of Subscribers.
-3. **Client B** sends a message (Publishes) directly to that specific Channel. 
-4. The internal Hub uses a Mutex to automatically Fan-out (distribute) copies of the payload to all 24/7 active Subscribers.
+1. **Subscriber** connects and sends `SUBSCRIBE channel [channel ...]` — enters subscription mode
+2. **Publisher** calls `PUBLISH channel payload` from any connection
+3. The internal `Hub` fans out the message to all active subscribers on that channel
+4. If a subscriber's buffer is full (slow consumer), it is automatically removed
+
+Channels do not need to be created in advance — they appear when the first subscriber joins and disappear when the last one leaves.
 
 ---
 
-## 1. Subscribing (Listening to a Channel)
+## Subscribing
 
-Unlike regular one-time gRPC calls, Subscribe is **Bi-directional or Server-Streaming**, requiring you to loop indefinitely (For Loop) using a lightweight Goroutine. It uses channels named `system_events` and `chat_room`.
-
-```go
-// A Background context is required (no Timeout) because it hangs long-term.
-stream, err := client.Subscribe(context.Background(), &pb.SubscribeRequest{
-	Channels: []string{"system_events", "notifications_user_123"},
-})
-if err != nil {
-	log.Fatalf("Subscribe error: %v", err)
-}
-
-// Start listening for Server Stream Messages
-for {
-	msg, err := stream.Recv()
-	if err != nil {
-		// Catches network drops / Server shutdown.
-		log.Printf("Disconnected: %v", err)
-		break
-	}
-	
-	// Print out when a message arrives:
-	fmt.Printf("[%s] %s\n", msg.Channel, msg.Payload)
-	// Output: "[system_events] System alert: OS update!"
-}
+```bash
+redis-cli -p 9090 SUBSCRIBE system-events notifications
 ```
 
-*Warning: Ember is designed so that if processing code (like the Print above on the Client) bottlenecks (Buffer Too Full - Slow Subscribers), the Ember Hub on the Server will actively throttle and abruptly drop this Subscriber to prevent Server RAM exhaustion. You must process messages as fast as possible!*
-
-## 2. Publishing (Broadcasting Messages)
-
-Whenever other Microservices in your cluster experience an event change (User orders an item, Update data), they just need to briefly call the `Publish` API once. If no one is subscribing at that moment, the message falls straight into the Void (Permanently deleted, not Archived to Disk).
-
-```go
-// Fire Message to the Channel
-res, err := client.Publish(ctx, &pb.PublishRequest{
-	Channel: "notifications_user_123",
-	Payload: `{"type": "new_order", "id": 501}`,
-})
-if err != nil {
-	log.Fatal(err)
-}
-
-// Easily find out how many actual Clients received the Push Notifications
-fmt.Printf("%d machines received this message in realtime.\n", res.Delivered)
+Response per channel:
+```
+1) "subscribe"
+2) "system-events"
+3) (integer) 1
 ```
 
-## Advantages of Using Ember for Pub/Sub
-- Avoids the need to configure and install bulky, heavy-duty Brokers like RabbitMQ or ActiveMQ if your System is lightweight.
-- Data streams directly through HTTP/2 Multiplexing of gRPC, reducing Ping Delay down to micro-seconds. 
-- Does not cause Blocking for other Clients at the Store Core Layer. The Hub is an entity completely independent from `store.Store`.
+Incoming messages look like:
+```
+1) "message"
+2) "system-events"
+3) "Server restarted"
+```
+
+**Subscription mode rules**: while subscribed, only `SUBSCRIBE`, `UNSUBSCRIBE`, and `PING` are accepted. All other commands return an error.
+
+---
+
+## Unsubscribing
+
+```bash
+# Unsubscribe from a specific channel
+redis-cli -p 9090 UNSUBSCRIBE system-events
+
+# Or Ctrl+C to disconnect (subscriber is automatically cleaned up)
+```
+
+---
+
+## Publishing
+
+```bash
+redis-cli -p 9090 PUBLISH system-events "Server restarted"
+# (integer) 1  ← number of subscribers that received the message
+```
+
+If no subscribers are active, the message is dropped (not persisted).
+
+---
+
+## Go Client Example
+
+```go
+import "github.com/redis/go-redis/v9"
+
+// Subscriber
+rdb := redis.NewClient(&redis.Options{Addr: "localhost:9090"})
+sub := rdb.Subscribe(ctx, "my-channel")
+defer sub.Close()
+
+ch := sub.Channel()
+for msg := range ch {
+    fmt.Printf("[%s] %s\n", msg.Channel, msg.Payload)
+}
+
+// Publisher (separate connection)
+rdb.Publish(ctx, "my-channel", "hello world")
+```
+
+---
+
+## Notes
+
+- Messages are not persisted — fire and forget
+- Slow subscribers are dropped to protect server memory
+- The `Hub` is fully independent from the key-value `Store`

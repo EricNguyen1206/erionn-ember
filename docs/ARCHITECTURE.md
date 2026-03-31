@@ -4,8 +4,7 @@ Single-process Go service with one shared in-memory keyspace and one shared pub/
 
 ## Pieces
 
-- gRPC for data commands
-- gRPC native health checks (`grpc.health.v1`)
+- RESP/TCP protocol (`redis-cli` compatible)
 - one `store.Store` for strings, hashes, lists, sets, and TTL
 - one `pubsub.Hub` for channel subscriptions and fan-out
 
@@ -13,18 +12,24 @@ Single-process Go service with one shared in-memory keyspace and one shared pub/
 
 ### `cmd/server`
 
-- loads `GRPC_PORT`
+- loads `PORT` env var (default `9090`)
 - creates the shared store and pub/sub hub
-- starts gRPC server
-- handles graceful shutdown
+- starts RESP/TCP server
+- handles graceful shutdown on SIGTERM/SIGINT, prints stats
 
-### `internal/server/grpc.go`
+### `internal/server`
 
-- validates requests
-- translates store errors into gRPC status codes
-- maps one RPC to one clear store or pub/sub operation
-- keeps transport logic thin
+**`server.go`** — `TCPServer`: accept loop, goroutine-per-connection
 
+**`client.go`** — per-connection state:
+- normal mode: dispatches commands via `CommandHandler`
+- subscription mode: only SUBSCRIBE/UNSUBSCRIBE/PING allowed, pushes messages asynchronously
+
+### `internal/core`
+
+**`reader.go`** — `RESPReader`: streaming command parser (RESP arrays + inline commands)
+
+**`cmd_handler/handler.go`** — `CommandHandler`: maps RESP commands to store/pubsub operations
 
 ### `internal/store`
 
@@ -52,34 +57,35 @@ Each key is stored as an `Entry` with:
 
 Supported value shapes:
 
-- string -> `string`
-- hash -> `map[string]string`
-- list -> `[]string`
-- set -> `map[string]struct{}`
+- string → `string`
+- hash → `map[string]string`
+- list → `[]string`
+- set → `map[string]struct{}`
 
 ## Request Flow
 
 ### String read
 
-1. Client sends `Get(key)` over gRPC
-2. gRPC handler validates the key
-3. Handler calls `store.GetString(key)`
+1. Client sends `GET key` over TCP (RESP)
+2. `RESPReader` parses the command
+3. `CommandHandler` calls `store.GetString(key)`
 4. Store checks expiration, type, and value
-5. Handler returns `found/value`
+5. Handler writes RESP-encoded response back to client
 
 ### Pub/sub
 
-1. Client opens `Subscribe(channels)` stream
-2. Server registers a subscriber in the hub
-3. Another client calls `Publish(channel, payload)`
-4. Hub fans the message out to active subscribers only
-5. gRPC stream sends `SubscribeMessage`
+1. Client sends `SUBSCRIBE channel` over TCP
+2. `client.go` registers a subscriber in the hub, enters subscription mode
+3. Another client sends `PUBLISH channel payload`
+4. Hub fans the message to all active subscribers
+5. `pushMessages()` goroutine writes RESP message push to the subscriber's TCP connection
 
 ## Concurrency
 
 - `store.Store` uses a mutex around keyspace mutation and lazy expiration
 - `pubsub.Hub` uses its own mutex for subscription bookkeeping
 - slow subscribers are removed instead of buffering unbounded data
+- `client.writeMu` protects concurrent writes from command loop and message push goroutine
 
 ## Operational Shape
 
@@ -87,6 +93,6 @@ Supported value shapes:
 - memory only
 - no persistence
 - no auth
-- no RESP compatibility layer
+- RESP/TCP, `redis-cli` compatible
 
 That is the whole runtime model.

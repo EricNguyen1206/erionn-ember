@@ -1,130 +1,88 @@
 # API Reference
 
-## gRPC
+gomemkv uses the **RESP (Redis Serialization Protocol)** over TCP — fully compatible with `redis-cli` and any Redis client library.
 
-Proto source: `proto/ember/v1/cache.proto`
+Default port: `9090`
 
-Service: `ember.v1.CacheService`
+---
 
-### Generic Commands
+## Generic Commands
 
-- `Del(DelRequest) -> DelResponse`
-  - Request: `key`
-  - Response: `deleted`
+| Command | Args | Response |
+|---|---|---|
+| `PING [message]` | optional message | `+PONG` or bulk string |
+| `DEL key [key ...]` | one or more keys | integer — number of keys deleted |
+| `EXISTS key [key ...]` | one or more keys | integer — number of keys that exist |
+| `TYPE key` | key | simple string: `string`, `hash`, `list`, `set`, `none` |
+| `EXPIRE key seconds` | key, TTL in seconds | `1` if set, `0` if key not found |
+| `TTL key` | key | seconds remaining, `-1` if no expiry, `-2` if not found |
+| `INFO` | — | bulk string with server/keyspace/pubsub stats |
+| `COMMAND` | — | `+OK` (minimal redis-cli handshake) |
 
-- `Exists(ExistsRequest) -> ExistsResponse`
-  - Request: `key`
-  - Response: `exists`
+---
 
-- `Type(TypeRequest) -> TypeResponse`
-  - Request: `key`
-  - Response: `type` in `none|string|hash|list|set`
+## Strings
 
-- `Expire(ExpireRequest) -> ExpireResponse`
-  - Request: `key`, `ttl_seconds`
-  - Response: `updated`
+| Command | Args | Response |
+|---|---|---|
+| `SET key value [EX seconds] [PX millis]` | key, value, optional TTL | `+OK` |
+| `GET key` | key | bulk string or nil |
+| `INCR key` | key | integer — new value |
 
-- `Ttl(TtlRequest) -> TtlResponse`
-  - Request: `key`
-  - Response: `found`, `has_expiration`, `ttl_seconds`
+---
 
-- `Stats(StatsRequest) -> StatsResponse`
-  - Response fields: `total_keys`, `string_keys`, `hash_keys`, `list_keys`, `set_keys`, `channels`, `subscribers`
+## Hashes
 
-- `Health(HealthRequest) -> HealthResponse`
-  - Response: `status`
+| Command | Args | Response |
+|---|---|---|
+| `HSET key field value [field value ...]` | key, field-value pairs | integer — number of new fields added |
+| `HGET key field` | key, field | bulk string or nil |
+| `HDEL key field [field ...]` | key, fields | integer — number of fields removed |
+| `HGETALL key` | key | array — alternating field, value pairs |
 
-### Strings
+---
 
-- `Get(GetRequest) -> GetResponse`
-  - Request: `key`
-  - Response: `found`, `value`
+## Lists
 
-- `Set(SetRequest) -> SetResponse`
-  - Request: `key`, `value`, optional `ttl_seconds`
+| Command | Args | Response |
+|---|---|---|
+| `LPUSH key value [value ...]` | key, values | integer — list length after push |
+| `RPUSH key value [value ...]` | key, values | integer — list length after push |
+| `LPOP key` | key | bulk string or nil |
+| `RPOP key` | key | bulk string or nil |
+| `LRANGE key start stop` | key, start, stop | array of strings (inclusive, supports negative indexes) |
 
-### Hashes
+---
 
-- `HSet(HSetRequest) -> HSetResponse`
-  - Request: `key`, `fields`
-  - Response: `added`
+## Sets
 
-- `HGet(HGetRequest) -> HGetResponse`
-  - Request: `key`, `field`
-  - Response: `found`, `value`
+| Command | Args | Response |
+|---|---|---|
+| `SADD key member [member ...]` | key, members | integer — number of new members added |
+| `SREM key member [member ...]` | key, members | integer — number of members removed |
+| `SMEMBERS key` | key | array of strings (sorted) |
+| `SISMEMBER key member` | key, member | `1` if member, `0` if not |
+| `SCARD key` | key | integer — number of members |
 
-- `HDel(HDelRequest) -> HDelResponse`
-  - Request: `key`, `fields`
-  - Response: `removed`
+---
 
-- `HGetAll(HGetAllRequest) -> HGetAllResponse`
-  - Request: `key`
-  - Response: `found`, `fields`
+## Pub/Sub
 
-### Lists
+| Command | Args | Response |
+|---|---|---|
+| `PUBLISH channel payload` | channel, payload | integer — number of subscribers that received the message |
+| `SUBSCRIBE channel [channel ...]` | channels | per-channel confirm: `*3 subscribe <channel> <count>` |
+| `UNSUBSCRIBE [channel ...]` | optional channels (all if omitted) | per-channel confirm: `*3 unsubscribe <channel> <count>` |
 
-- `LPush(LPushRequest) -> LPushResponse`
-- `RPush(RPushRequest) -> RPushResponse`
-  - Request: `key`, `values`
-  - Response: `length`
+**Subscription mode**: once subscribed, only `SUBSCRIBE`, `UNSUBSCRIBE`, and `PING` are allowed.
 
-- `LPop(LPopRequest) -> LPopResponse`
-- `RPop(RPopRequest) -> RPopResponse`
-  - Request: `key`
-  - Response: `found`, `value`
+**Message push format**: `*3\r\n$7\r\nmessage\r\n$<len>\r\n<channel>\r\n$<len>\r\n<payload>\r\n`
 
-- `LRange(LRangeRequest) -> LRangeResponse`
-  - Request: `key`, `start`, `stop`
-  - Response: `found`, `values`
-  - Range is inclusive and supports negative indexes
+---
 
-### Sets
+## Error Responses
 
-- `SAdd(SAddRequest) -> SAddResponse`
-  - Request: `key`, `members`
-  - Response: `added`
-
-- `SRem(SRemRequest) -> SRemResponse`
-  - Request: `key`, `members`
-  - Response: `removed`
-
-- `SMembers(SMembersRequest) -> SMembersResponse`
-  - Request: `key`
-  - Response: `found`, `members`
-
-- `SIsMember(SIsMemberRequest) -> SIsMemberResponse`
-  - Request: `key`, `member`
-  - Response: `is_member`
-
-### Pub/Sub
-
-- `Publish(PublishRequest) -> PublishResponse`
-  - Request: `channel`, `payload`
-  - Response: `delivered`
-
-- `Subscribe(SubscribeRequest) -> stream SubscribeMessage`
-  - Request: `channels`
-  - Stream message fields: `channel`, `payload`, `published_at_unix`
-
-## Error Mapping
-
-- Invalid request data -> `codes.InvalidArgument`
-- Wrong type for key -> `codes.FailedPrecondition`
-- Corrupt in-memory value -> `codes.Internal`
-
-Missing data is usually represented in the response body rather than as an error:
-
-- `Get`, `HGet`, `LPop`, `RPop` use `found=false`
-- `SMembers` and `HGetAll` use `found=false`
-- `SIsMember` returns `is_member=false`
-- `Type` returns `none`
-
-## Standard gRPC Health Check
-
-Ember implements the standard `grpc.health.v1.Health` service natively.
-
-You can verify the server health using standard tooling like `grpc_health_probe`:
-
-```bash
-grpc_health_probe -addr=localhost:9090
-```
+- Wrong type for key → `-WRONGTYPE Operation against a key holding the wrong kind of value`
+- Missing/bad args → `-ERR wrong number of arguments for '<cmd>' command`
+- Unknown command → `-ERR unknown command '<cmd>'`
+- Missing data is returned as nil (`$-1\r\n`) rather than an error

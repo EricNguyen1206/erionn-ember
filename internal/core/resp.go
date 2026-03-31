@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EricNguyen1206/erionn-ember/internal/constant"
+	"gomemkv/internal/constant"
 )
 
 const CRLF string = "\r\n"

@@ -1,6 +1,6 @@
-.PHONY: build test clean run lint test-verbose test-race proto docker-build release-validate
+.PHONY: build test clean run lint test-verbose test-race docker-build release-validate
 
-BIN := bin/erion-ember
+BIN := bin/gomemkv
 
 ## build: compile the server binary
 build:
@@ -30,18 +30,10 @@ clean:
 lint:
 	golangci-lint run ./...
 
-## proto: generate protobuf bindings
-proto:
-	protoc \
-	  --go_out=. \
-	  --go_opt=paths=source_relative \
-	  --go-grpc_out=. \
-	  --go-grpc_opt=paths=source_relative \
-	  proto/ember/v1/cache.proto
 
 ## docker-build: build the container image locally
 docker-build:
-	docker build -t erion-ember:local .
+	docker build -t gomemkv:local .
 
 ## release-validate: run release validation checklist
 release-validate: build test test-race lint

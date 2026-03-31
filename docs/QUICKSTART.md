@@ -1,96 +1,64 @@
 # Quickstart Guide
 
-Welcome to **Erionn Ember** - A miniature, in-memory cache server written in Go that communicates via gRPC. 
+**gomemkv** — in-memory key-value store written in Go, `redis-cli` compatible via RESP/TCP.
 
-This guide will help you start the server and connect your first application to Ember.
+---
 
-## 1. Running the Ember Server
-
-First, you need to build and run the server locally.
+## 1. Run the Server
 
 ```bash
-# Compile code
 make build
-
-# Run the server
-./bin/erionn-ember
+./bin/gomemkv
+# or: PORT=9090 ./bin/gomemkv
 ```
 
-The server will start and listen on a single gRPC port:
-- `grpc://localhost:9090`: The main port for data communication and `grpc.health.v1` health checks.
+The server listens on `tcp://localhost:9090`.
 
-Verify that the server is running using `grpc_health_probe`:
+Verify it's running:
 ```bash
-grpc_health_probe -addr=localhost:9090
-# Should return: status: SERVING
+redis-cli -p 9090 PING
+# PONG
 ```
 
-## 2. Preparing the Client
+---
 
-Ember communicates exclusively via gRPC protobuf. In your client project (e.g., Golang), you need to include Ember's protobuf file `proto/ember/v1/cache.proto` and install the gRPC package.
+## 2. Basic Commands
 
 ```bash
-go get google.golang.org/grpc
-go get google.golang.org/grpc/credentials/insecure
+redis-cli -p 9090 SET hello world
+redis-cli -p 9090 GET hello          # "world"
+redis-cli -p 9090 SET counter 0
+redis-cli -p 9090 INCR counter       # (integer) 1
+redis-cli -p 9090 DEL hello counter  # (integer) 2
 ```
 
-## 3. Your First Code (Hello World)
+---
 
-Let's try connecting to the Server and performing basic `Set` and `Get` operations.
+## 3. Pub/Sub
 
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	pb "github.com/ericnguyen1206/erionn-ember/proto/ember/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-)
-
-func main() {
-	// Connect to local port 9090 (Insecure for local dev)
-	conn, err := grpc.Dial("localhost:9090", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Fatalf("Failed to connect: %v", err)
-	}
-	defer conn.Close()
-
-	client := pb.NewCacheServiceClient(conn)
-	ctx := context.Background()
-
-	// 1. Store Data (String)
-	ttl := int32(3600) // Live for 1 hour
-	_, err = client.Set(ctx, &pb.SetRequest{
-		Key:        "hello",
-		Value:      "world",
-		TtlSeconds: &ttl,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("Successfully stored key 'hello'.")
-
-	// 2. Retrieve Data
-	res, err := client.Get(ctx, &pb.GetRequest{Key: "hello"})
-	if err != nil {
-		log.Fatal(err)
-	}
-	
-	if res.Found {
-		fmt.Printf("Value of 'hello' is: %s\n", res.Value)
-	} else {
-		fmt.Println("Data not found!")
-	}
-}
+**Terminal 1** — Subscribe:
+```bash
+redis-cli -p 9090 SUBSCRIBE my-channel
 ```
+
+**Terminal 2** — Publish:
+```bash
+redis-cli -p 9090 PUBLISH my-channel "hello world"
+# (integer) 1
+```
+
+Terminal 1 will display:
+```
+1) "message"
+2) "my-channel"
+3) "hello world"
+```
+
+---
 
 ## What's Next?
 
-Now that you know how to connect, check out these guides to master Ember:
-- [Data Model & Structures](DATA_MODEL.md): How to use Hashes, Lists, and Sets.
-- [Pub/Sub Guide](PUB_SUB.md): Using Ember as a real-time Message Broker.
-- [API Reference](API_REFERENCE.md): Detailed reference of all gRPC commands.
+- [API Reference](API_REFERENCE.md) — all supported commands
+- [Data Model](DATA_MODEL.md) — hashes, lists, sets
+- [Pub/Sub Guide](PUB_SUB.md) — real-time messaging
+- [Architecture](ARCHITECTURE.md) — internal design

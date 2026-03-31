@@ -1,6 +1,6 @@
-# erionn-ember
+# gomemkv
 
-grpc cache server in go.
+In-memory key-value store (Redis-like) with RESP/TCP protocol and pub/sub. Written in Go.
 
 has:
 - strings
@@ -13,16 +13,15 @@ does not have:
 - persistence
 - auth
 - clustering
-- resp
 
 ports:
-- grpc `9090`
+- tcp `9090` (RESP protocol, `redis-cli` compatible)
 
 run:
 
 ```bash
 make build
-./bin/erionn-ember
+./bin/gomemkv
 ```
 
 dev:
@@ -31,10 +30,8 @@ dev:
 make test
 make test-race
 make lint
-make proto
 ```
 
 more:
-- `proto/ember/v1/cache.proto`
 - `docs/API_REFERENCE.md`
 - `docs/ARCHITECTURE.md`

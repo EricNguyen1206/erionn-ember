@@ -64,6 +64,92 @@ func (h *Hub) Subscribe(channels []string) *Subscriber {
 	return sub
 }
 
+// NewSubscriber creates a subscriber with no channel subscriptions.
+// Use AddChannels/RemoveChannels to manage subscriptions incrementally.
+func (h *Hub) NewSubscriber() *Subscriber {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	id := strconv.FormatInt(h.nextID.Add(1), 10)
+	sub := &Subscriber{
+		ID:       id,
+		Channels: []string{},
+		Messages: make(chan Message, h.buffer),
+	}
+	h.byID[id] = sub
+	return sub
+}
+
+// AddChannels adds channels to an existing subscriber. Returns the total
+// number of channels the subscriber is now subscribed to.
+func (h *Hub) AddChannels(id string, channels []string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	sub, ok := h.byID[id]
+	if !ok {
+		return 0
+	}
+
+	existing := make(map[string]struct{}, len(sub.Channels))
+	for _, ch := range sub.Channels {
+		existing[ch] = struct{}{}
+	}
+
+	for _, ch := range channels {
+		if ch == "" {
+			continue
+		}
+		if _, exists := existing[ch]; exists {
+			continue
+		}
+		existing[ch] = struct{}{}
+		sub.Channels = append(sub.Channels, ch)
+		if h.routes[ch] == nil {
+			h.routes[ch] = make(map[string]*Subscriber)
+		}
+		h.routes[ch][id] = sub
+	}
+	return len(sub.Channels)
+}
+
+// RemoveChannels removes channels from an existing subscriber. Returns the
+// total number of channels remaining. If no channels remain, the subscriber
+// is automatically removed and its Messages channel is closed.
+func (h *Hub) RemoveChannels(id string, channels []string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	sub, ok := h.byID[id]
+	if !ok {
+		return 0
+	}
+
+	toRemove := make(map[string]struct{}, len(channels))
+	for _, ch := range channels {
+		toRemove[ch] = struct{}{}
+	}
+
+	remaining := make([]string, 0, len(sub.Channels))
+	for _, ch := range sub.Channels {
+		if _, remove := toRemove[ch]; remove {
+			subscribers := h.routes[ch]
+			delete(subscribers, id)
+			if len(subscribers) == 0 {
+				delete(h.routes, ch)
+			}
+		} else {
+			remaining = append(remaining, ch)
+		}
+	}
+	sub.Channels = remaining
+
+	if len(remaining) == 0 {
+		h.removeLocked(id)
+	}
+	return len(remaining)
+}
+
 func (h *Hub) Remove(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

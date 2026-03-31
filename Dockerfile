@@ -7,19 +7,19 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -ldflags="-s -w" -o /bin/erionn-ember ./cmd/server/
+RUN go build -ldflags="-s -w" -o /bin/gomemkv ./cmd/server/
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates && \
-    addgroup -S ember && \
-    adduser -S -G ember -h /app ember
+    addgroup -S gomemkv && \
+    adduser -S -G gomemkv -h /app gomemkv
 
-ENV GRPC_PORT=9090
+ENV PORT=9090
 
 WORKDIR /app
 
-COPY --from=builder /bin/erionn-ember /bin/erionn-ember
+COPY --from=builder /bin/gomemkv /bin/gomemkv
 
 EXPOSE 9090
-USER ember:ember
-ENTRYPOINT ["/bin/erionn-ember"]
+USER gomemkv:gomemkv
+ENTRYPOINT ["/bin/gomemkv"]
