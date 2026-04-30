@@ -1,0 +1,42 @@
+name: Go
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.4"
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+
+      - name: Go Test
+        run: go test -v -race ./...
+
+      - name: Build gomemkv
+        run: go build -ldflags="-s -w" -o bin/gomemkv ./cmd/gomemkv
+
+      - name: Start Server
+        run: ./bin/gomemkv &
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run Redis Integration Tests
+        run: |
+          cd test/redis
+          npm ci
+          npm test
