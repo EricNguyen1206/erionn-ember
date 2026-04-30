@@ -2,36 +2,41 @@
 
 In-memory key-value store (Redis-like) with RESP/TCP protocol and pub/sub. Written in Go.
 
-has:
-- strings
-- hashes
-- lists
-- sets
-- pubsub
+**has:**
+- strings, hashes, lists, sets
+- pub/sub
 
-does not have:
+**does not have:**
 - persistence
 - auth
 - clustering
 
-ports:
-- tcp `9090` (RESP protocol, `redis-cli` compatible)
+**port:** tcp `9090` (RESP protocol, `redis-cli` compatible)
 
-run:
+## Run
 
 ```bash
-make build
+go build -o bin/gomemkv ./cmd/gomemkv
 ./bin/gomemkv
 ```
 
-dev:
+Test with `redis-cli`:
 
 ```bash
-make test
-make test-race
-make lint
+redis-cli -p 9090
+127.0.0.1:9090> SET greeting "Hello gomemkv"
+OK
+127.0.0.1:9090> GET greeting
+"Hello gomemkv"
 ```
 
-more:
-- `docs/API_REFERENCE.md`
-- `docs/ARCHITECTURE.md`
+## Dev
+
+```bash
+go test ./...
+go test -race ./...
+```
+
+## Docs
+
+Full documentation is available on the [wiki](https://github.com/EricNguyen1206/gomemkv/wiki).
