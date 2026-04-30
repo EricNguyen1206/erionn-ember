@@ -7,42 +7,52 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
-	"gomemkv/internal/core"
-	"gomemkv/internal/core/cmd_handler"
+	"gomemkv/internal/handler"
 	"gomemkv/internal/pubsub"
+	"gomemkv/pkg/resp"
 )
 
-// client represents a single TCP connection with optional pub/sub state.
 type client struct {
-	conn    net.Conn
-	reader  *core.RESPReader
-	handler *cmd_handler.CommandHandler
-	hub     *pubsub.Hub
+	conn        net.Conn
+	reader      *resp.Reader
+	handler     *handler.CommandHandler
+	hub         *pubsub.Hub
+	idleTimeout time.Duration
 
-	writeMu sync.Mutex
-	sub     *pubsub.Subscriber
-	done    chan struct{}
+	writeMu  sync.Mutex
+	sub      *pubsub.Subscriber
+	done     chan struct{}
+
+	txActive bool
+	txQueue  []*resp.Command
 }
 
-func newClient(conn net.Conn, handler *cmd_handler.CommandHandler, hub *pubsub.Hub) *client {
+func newClient(conn net.Conn, handler *handler.CommandHandler, hub *pubsub.Hub, idleTimeout time.Duration) *client {
 	return &client{
-		conn:    conn,
-		reader:  core.NewRESPReader(conn),
-		handler: handler,
-		hub:     hub,
-		done:    make(chan struct{}),
+		conn:        conn,
+		reader:      resp.NewReader(conn),
+		handler:     handler,
+		hub:         hub,
+		idleTimeout: idleTimeout,
+		done:        make(chan struct{}),
 	}
 }
 
-// handleLoop reads commands from the connection and dispatches them.
 func (c *client) handleLoop() {
 	defer c.cleanup()
 
 	for {
+		if c.idleTimeout > 0 {
+			_ = c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+		}
+
 		cmd, err := c.reader.ReadCommand()
 		if err != nil {
-			if err != io.EOF {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				slog.Debug("client idle timeout", "remote", c.conn.RemoteAddr())
+			} else if err != io.EOF {
 				slog.Debug("client read error", "remote", c.conn.RemoteAddr(), "err", err)
 			}
 			return
@@ -50,7 +60,6 @@ func (c *client) handleLoop() {
 
 		upperCmd := strings.ToUpper(cmd.Cmd)
 
-		// Handle subscription commands at connection level
 		switch upperCmd {
 		case "SUBSCRIBE":
 			if err := c.cmdSUBSCRIBE(cmd.Args); err != nil {
@@ -62,9 +71,63 @@ func (c *client) handleLoop() {
 				return
 			}
 			continue
+		case "QUIT":
+			_ = c.writeResp(resp.Ok)
+			return
+		case "MULTI":
+			if c.txActive {
+				if err := c.writeResp(resp.EncodeError("ERR MULTI calls can not be nested")); err != nil {
+					return
+				}
+				continue
+			}
+			c.txActive = true
+			c.txQueue = c.txQueue[:0]
+			if err := c.writeResp(resp.Ok); err != nil {
+				return
+			}
+			continue
+		case "EXEC":
+			if !c.txActive {
+				if err := c.writeResp(resp.EncodeError("ERR EXEC without MULTI")); err != nil {
+					return
+				}
+				continue
+			}
+			c.txActive = false
+			results := make([][]byte, len(c.txQueue))
+			for i, queued := range c.txQueue {
+				results[i] = c.handler.Execute(queued)
+			}
+			c.txQueue = c.txQueue[:0]
+			if err := c.writeResp(encodeTxResults(results)); err != nil {
+				return
+			}
+			continue
+		case "DISCARD":
+			if !c.txActive {
+				if err := c.writeResp(resp.EncodeError("ERR DISCARD without MULTI")); err != nil {
+					return
+				}
+				continue
+			}
+			c.txActive = false
+			c.txQueue = c.txQueue[:0]
+			if err := c.writeResp(resp.Ok); err != nil {
+				return
+			}
+			continue
 		}
 
-		// If in subscription mode, only allow SUBSCRIBE, UNSUBSCRIBE, PING
+		// Queue command if inside MULTI
+		if c.txActive {
+			c.txQueue = append(c.txQueue, cmd)
+			if err := c.writeResp([]byte("+QUEUED\r\n")); err != nil {
+				return
+			}
+			continue
+		}
+
 		if c.sub != nil {
 			if upperCmd == "PING" {
 				if err := c.writeResp(c.handler.Execute(cmd)); err != nil {
@@ -72,13 +135,12 @@ func (c *client) handleLoop() {
 				}
 				continue
 			}
-			if err := c.writeResp(respErr("ERR only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING are allowed in this context")); err != nil {
+			if err := c.writeResp(resp.EncodeError("ERR only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING are allowed in this context")); err != nil {
 				return
 			}
 			continue
 		}
 
-		// Normal command execution
 		res := c.handler.Execute(cmd)
 		if err := c.writeResp(res); err != nil {
 			return
@@ -88,10 +150,9 @@ func (c *client) handleLoop() {
 
 func (c *client) cmdSUBSCRIBE(args []string) error {
 	if len(args) == 0 {
-		return c.writeResp(respErr("ERR wrong number of arguments for 'SUBSCRIBE' command"))
+		return c.writeResp(resp.EncodeError("ERR wrong number of arguments for 'SUBSCRIBE' command"))
 	}
 
-	// Lazy-init subscriber on first SUBSCRIBE
 	if c.sub == nil {
 		c.sub = c.hub.NewSubscriber()
 		go c.pushMessages()
@@ -100,8 +161,8 @@ func (c *client) cmdSUBSCRIBE(args []string) error {
 	for _, channel := range args {
 		c.hub.AddChannels(c.sub.ID, []string{channel})
 		count := len(c.sub.Channels)
-		resp := encodeSubResponse("subscribe", channel, count)
-		if err := c.writeResp(resp); err != nil {
+		data := encodeSubResponse("subscribe", channel, count)
+		if err := c.writeResp(data); err != nil {
 			return err
 		}
 	}
@@ -110,7 +171,6 @@ func (c *client) cmdSUBSCRIBE(args []string) error {
 
 func (c *client) cmdUNSUBSCRIBE(args []string) error {
 	if c.sub == nil {
-		// Not subscribed — send unsubscribe with 0 count
 		if len(args) == 0 {
 			return c.writeResp(encodeSubResponse("unsubscribe", "", 0))
 		}
@@ -122,7 +182,6 @@ func (c *client) cmdUNSUBSCRIBE(args []string) error {
 		return nil
 	}
 
-	// If no args, unsubscribe from all channels
 	channels := args
 	if len(channels) == 0 {
 		channels = append([]string(nil), c.sub.Channels...)
@@ -134,7 +193,6 @@ func (c *client) cmdUNSUBSCRIBE(args []string) error {
 			return err
 		}
 
-		// If no channels remaining, subscriber was auto-removed by hub
 		if remaining == 0 {
 			close(c.done)
 			c.sub = nil
@@ -145,8 +203,6 @@ func (c *client) cmdUNSUBSCRIBE(args []string) error {
 	return nil
 }
 
-// pushMessages reads from the subscriber's message channel and pushes
-// RESP-encoded messages to the TCP connection.
 func (c *client) pushMessages() {
 	for {
 		select {
@@ -154,8 +210,8 @@ func (c *client) pushMessages() {
 			if !ok {
 				return
 			}
-			resp := encodeMessagePush(msg.Channel, msg.Payload)
-			if err := c.writeResp(resp); err != nil {
+			data := encodeMessagePush(msg.Channel, msg.Payload)
+			if err := c.writeResp(data); err != nil {
 				return
 			}
 		case <-c.done:
@@ -164,7 +220,6 @@ func (c *client) pushMessages() {
 	}
 }
 
-// writeResp writes data to the connection with mutex protection.
 func (c *client) writeResp(data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -184,11 +239,6 @@ func (c *client) cleanup() {
 	c.conn.Close()
 }
 
-// --- RESP encoding helpers ---
-
-// encodeSubResponse encodes a subscribe/unsubscribe response:
-//
-//	*3\r\n$<len>\r\n<type>\r\n$<len>\r\n<channel>\r\n:<count>\r\n
 func encodeSubResponse(msgType, channel string, count int) []byte {
 	return []byte(fmt.Sprintf("*3\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n:%d\r\n",
 		len(msgType), msgType,
@@ -197,9 +247,6 @@ func encodeSubResponse(msgType, channel string, count int) []byte {
 	))
 }
 
-// encodeMessagePush encodes a pub/sub message push:
-//
-//	*3\r\n$7\r\nmessage\r\n$<len>\r\n<channel>\r\n$<len>\r\n<payload>\r\n
 func encodeMessagePush(channel string, payload []byte) []byte {
 	return []byte(fmt.Sprintf("*3\r\n$7\r\nmessage\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
 		len(channel), channel,
@@ -207,6 +254,16 @@ func encodeMessagePush(channel string, payload []byte) []byte {
 	))
 }
 
-func respErr(msg string) []byte {
-	return []byte(fmt.Sprintf("-%s\r\n", msg))
+func encodeTxResults(results [][]byte) []byte {
+	header := fmt.Sprintf("*%d\r\n", len(results))
+	total := len(header)
+	for _, r := range results {
+		total += len(r)
+	}
+	buf := make([]byte, 0, total)
+	buf = append(buf, header...)
+	for _, r := range results {
+		buf = append(buf, r...)
+	}
+	return buf
 }

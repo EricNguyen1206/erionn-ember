@@ -1,9 +1,0 @@
-version: "3.9"
-services:
-  gomemkv:
-    build: .
-    ports:
-      - "9090:9090"
-    environment:
-      - PORT=9090
-    restart: unless-stopped

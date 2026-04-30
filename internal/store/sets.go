@@ -70,10 +70,10 @@ func (s *Store) SMembers(key string) ([]string, bool, error) {
 		return nil, false, ErrEmptyKey
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	set, entry, found, err := s.getSetLocked(key)
+	set, _, found, err := s.getSetRLocked(key)
 	if err != nil || !found {
 		return nil, false, err
 	}
@@ -83,7 +83,6 @@ func (s *Store) SMembers(key string) ([]string, bool, error) {
 		members = append(members, member)
 	}
 	sort.Strings(members)
-	entry.UpdatedAt = time.Now()
 	return members, true, nil
 }
 
@@ -92,18 +91,15 @@ func (s *Store) SIsMember(key, member string) (bool, error) {
 		return false, ErrEmptyKey
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	set, entry, found, err := s.getSetLocked(key)
+	set, _, found, err := s.getSetRLocked(key)
 	if err != nil || !found {
 		return false, err
 	}
 
 	_, exists := set[member]
-	if exists {
-		entry.UpdatedAt = time.Now()
-	}
 	return exists, nil
 }
 
@@ -142,6 +138,22 @@ func (s *Store) createSetEntryLocked(key string) (map[string]struct{}, *Entry, e
 func (s *Store) getSetLocked(key string) (map[string]struct{}, *Entry, bool, error) {
 	entry, ok := s.entries[key]
 	if !ok || s.pruneExpiredLocked(key, entry) {
+		return nil, nil, false, nil
+	}
+	if entry.Type != TypeSet {
+		return nil, nil, false, ErrWrongType
+	}
+
+	set, ok := entry.Value.(map[string]struct{})
+	if !ok {
+		return nil, nil, false, ErrInvalidValue
+	}
+	return set, entry, true, nil
+}
+
+func (s *Store) getSetRLocked(key string) (map[string]struct{}, *Entry, bool, error) {
+	entry, ok := s.entries[key]
+	if !ok || s.isExpired(entry) {
 		return nil, nil, false, nil
 	}
 	if entry.Type != TypeSet {

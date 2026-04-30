@@ -2,12 +2,16 @@ FROM golang:1.23-alpine AS builder
 
 ENV CGO_ENABLED=0
 
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+
 WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod go.sum* ./
+RUN go mod download 2>/dev/null || true
 
 COPY . .
-RUN go build -ldflags="-s -w" -o /bin/gomemkv ./cmd/server/
+RUN go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o /bin/gomemkv ./cmd/gomemkv/
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates && \

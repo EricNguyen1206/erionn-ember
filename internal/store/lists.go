@@ -23,16 +23,15 @@ func (s *Store) LRange(key string, start, stop int64) ([]string, bool, error) {
 		return nil, false, ErrEmptyKey
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	list, entry, found, err := s.getListLocked(key)
+	list, _, found, err := s.getListRLocked(key)
 	if err != nil || !found {
 		return nil, false, err
 	}
 
 	from, to, ok := normalizeRange(len(list), start, stop)
-	entry.UpdatedAt = time.Now()
 	if !ok {
 		return []string{}, true, nil
 	}
@@ -145,6 +144,22 @@ func (s *Store) createListEntryLocked(key string) ([]string, *Entry, error) {
 func (s *Store) getListLocked(key string) ([]string, *Entry, bool, error) {
 	entry, ok := s.entries[key]
 	if !ok || s.pruneExpiredLocked(key, entry) {
+		return nil, nil, false, nil
+	}
+	if entry.Type != TypeList {
+		return nil, nil, false, ErrWrongType
+	}
+
+	list, ok := entry.Value.([]string)
+	if !ok {
+		return nil, nil, false, ErrInvalidValue
+	}
+	return list, entry, true, nil
+}
+
+func (s *Store) getListRLocked(key string) ([]string, *Entry, bool, error) {
+	entry, ok := s.entries[key]
+	if !ok || s.isExpired(entry) {
 		return nil, nil, false, nil
 	}
 	if entry.Type != TypeList {

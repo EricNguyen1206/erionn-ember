@@ -27,3 +27,10 @@ Thumbs.db
 
 # other
 tmp/
+/test/*/node_modules
+.gitnexus
+
+.claude/
+.agent/
+AGENTS.md
+CLAUDE.md

@@ -6,7 +6,7 @@ import (
 )
 
 type Store struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	entries map[string]*Entry
 }
 
@@ -28,11 +28,11 @@ func (s *Store) Del(key string) bool {
 }
 
 func (s *Store) Exists(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	entry, ok := s.entries[key]
-	if !ok || s.pruneExpiredLocked(key, entry) {
+	if !ok || s.isExpired(entry) {
 		return false
 	}
 
@@ -40,11 +40,11 @@ func (s *Store) Exists(key string) bool {
 }
 
 func (s *Store) Type(key string) EntryType {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	entry, ok := s.entries[key]
-	if !ok || s.pruneExpiredLocked(key, entry) {
+	if !ok || s.isExpired(entry) {
 		return TypeNone
 	}
 
@@ -107,6 +107,8 @@ func (s *Store) Stats() Stats {
 			stats.ListKeys++
 		case TypeSet:
 			stats.SetKeys++
+		case TypeZSet:
+			stats.ZSetKeys++
 		}
 	}
 
@@ -120,4 +122,8 @@ func (s *Store) pruneExpiredLocked(key string, entry *Entry) bool {
 
 	delete(s.entries, key)
 	return true
+}
+
+func (s *Store) isExpired(entry *Entry) bool {
+	return !entry.ExpiresAt.IsZero() && time.Now().After(entry.ExpiresAt)
 }

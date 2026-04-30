@@ -1,10 +1,14 @@
 .PHONY: build test clean run lint test-verbose test-race docker-build release-validate
 
-BIN := bin/gomemkv
+BIN     := bin/gomemkv
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+DATE    ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
 ## build: compile the server binary
 build:
-	go build -o $(BIN) ./cmd/server/
+	go build -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/gomemkv/
 
 ## test: run all tests
 test:
@@ -29,7 +33,6 @@ clean:
 ## lint: run golangci-lint
 lint:
 	golangci-lint run ./...
-
 
 ## docker-build: build the container image locally
 docker-build:

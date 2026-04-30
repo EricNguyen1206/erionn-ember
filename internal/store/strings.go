@@ -1,6 +1,47 @@
 package store
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
+
+func (s *Store) IncrString(key string) (int64, error) {
+	if key == "" {
+		return 0, ErrEmptyKey
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.entries[key]
+	if ok && !s.pruneExpiredLocked(key, entry) {
+		if entry.Type != TypeString {
+			return 0, ErrWrongType
+		}
+		value, ok := entry.Value.(string)
+		if !ok {
+			return 0, ErrInvalidValue
+		}
+		num, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, ErrNotInteger
+		}
+		num++
+		entry.Value = strconv.FormatInt(num, 10)
+		entry.UpdatedAt = time.Now()
+		return num, nil
+	}
+
+	now := time.Now()
+	s.entries[key] = &Entry{
+		Key:       key,
+		Type:      TypeString,
+		Value:     "1",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	return 1, nil
+}
 
 func (s *Store) SetString(key, value string, ttl time.Duration) error {
 	if key == "" {
@@ -33,11 +74,11 @@ func (s *Store) GetString(key string) (string, bool, error) {
 		return "", false, ErrEmptyKey
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	entry, ok := s.entries[key]
-	if !ok || s.pruneExpiredLocked(key, entry) {
+	if !ok || s.isExpired(entry) {
 		return "", false, nil
 	}
 	if entry.Type != TypeString {
@@ -49,6 +90,5 @@ func (s *Store) GetString(key string) (string, bool, error) {
 		return "", false, ErrInvalidValue
 	}
 
-	entry.UpdatedAt = time.Now()
 	return value, true, nil
 }

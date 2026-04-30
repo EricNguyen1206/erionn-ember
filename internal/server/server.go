@@ -2,19 +2,27 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
+	"time"
 
-	"gomemkv/internal/core/cmd_handler"
+	"gomemkv/internal/handler"
 	"gomemkv/internal/pubsub"
 	"gomemkv/internal/store"
 )
 
-// TCPServer is a RESP-compatible TCP server.
+type ServerConfig struct {
+	MaxConns    int
+	IdleTimeout time.Duration
+}
+
 type TCPServer struct {
-	listener net.Listener
-	handler  *cmd_handler.CommandHandler
-	hub      *pubsub.Hub
+	listener    net.Listener
+	handler     *handler.CommandHandler
+	hub         *pubsub.Hub
+	maxConns    int
+	idleTimeout time.Duration
 
 	mu     sync.Mutex
 	conns  map[net.Conn]struct{}
@@ -22,29 +30,27 @@ type TCPServer struct {
 	done   chan struct{}
 }
 
-// NewServer creates a new TCPServer bound to addr.
-func NewServer(addr string, s *store.Store, h *pubsub.Hub) (*TCPServer, error) {
+func NewServer(addr string, s *store.Store, h *pubsub.Hub, cfg ServerConfig) (*TCPServer, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", addr, err)
 	}
 
 	return &TCPServer{
-		listener: listener,
-		handler:  cmd_handler.New(s, h),
-		hub:      h,
-		conns:    make(map[net.Conn]struct{}),
-		done:     make(chan struct{}),
+		listener:    listener,
+		handler:     handler.New(s, h),
+		hub:         h,
+		maxConns:    cfg.MaxConns,
+		idleTimeout: cfg.IdleTimeout,
+		conns:       make(map[net.Conn]struct{}),
+		done:        make(chan struct{}),
 	}, nil
 }
 
-// Addr returns the listener's network address.
 func (t *TCPServer) Addr() net.Addr {
 	return t.listener.Addr()
 }
 
-// Serve accepts connections and handles them. Blocks until the listener is
-// closed or an unrecoverable error occurs.
 func (t *TCPServer) Serve() error {
 	defer close(t.done)
 
@@ -61,10 +67,16 @@ func (t *TCPServer) Serve() error {
 		}
 
 		t.mu.Lock()
+		if t.maxConns > 0 && len(t.conns) >= t.maxConns {
+			t.mu.Unlock()
+			slog.Warn("connection limit reached, rejecting", "remote", conn.RemoteAddr(), "max", t.maxConns)
+			conn.Close()
+			continue
+		}
 		t.conns[conn] = struct{}{}
 		t.mu.Unlock()
 
-		c := newClient(conn, t.handler, t.hub)
+		c := newClient(conn, t.handler, t.hub, t.idleTimeout)
 		go func() {
 			c.handleLoop()
 			t.mu.Lock()
@@ -74,8 +86,6 @@ func (t *TCPServer) Serve() error {
 	}
 }
 
-// GracefulStop stops accepting new connections and waits for existing
-// connections to finish.
 func (t *TCPServer) GracefulStop() {
 	t.mu.Lock()
 	t.closed = true
@@ -85,7 +95,6 @@ func (t *TCPServer) GracefulStop() {
 	<-t.done
 }
 
-// Stop forcibly closes all connections and the listener.
 func (t *TCPServer) Stop() {
 	t.mu.Lock()
 	t.closed = true

@@ -10,6 +10,7 @@ const (
 	TypeHash   EntryType = "hash"
 	TypeList   EntryType = "list"
 	TypeSet    EntryType = "set"
+	TypeZSet   EntryType = "zset"
 )
 
 type Entry struct {
@@ -27,4 +28,5 @@ type Stats struct {
 	HashKeys   int64
 	ListKeys   int64
 	SetKeys    int64
+	ZSetKeys   int64
 }

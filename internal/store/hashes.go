@@ -34,18 +34,15 @@ func (s *Store) HGet(key, field string) (string, bool, error) {
 		return "", false, ErrEmptyKey
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	hash, entry, found, err := s.getHashLocked(key)
+	hash, _, found, err := s.getHashRLocked(key)
 	if err != nil || !found {
 		return "", false, err
 	}
 
 	value, ok := hash[field]
-	if ok {
-		entry.UpdatedAt = time.Now()
-	}
 	return value, ok, nil
 }
 
@@ -54,10 +51,10 @@ func (s *Store) HGetAll(key string) (map[string]string, bool, error) {
 		return nil, false, ErrEmptyKey
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	hash, entry, found, err := s.getHashLocked(key)
+	hash, _, found, err := s.getHashRLocked(key)
 	if err != nil || !found {
 		return nil, false, err
 	}
@@ -66,7 +63,6 @@ func (s *Store) HGetAll(key string) (map[string]string, bool, error) {
 	for field, value := range hash {
 		copyFields[field] = value
 	}
-	entry.UpdatedAt = time.Now()
 	return copyFields, true, nil
 }
 
@@ -138,6 +134,22 @@ func (s *Store) createHashEntryLocked(key string) (map[string]string, *Entry, er
 func (s *Store) getHashLocked(key string) (map[string]string, *Entry, bool, error) {
 	entry, ok := s.entries[key]
 	if !ok || s.pruneExpiredLocked(key, entry) {
+		return nil, nil, false, nil
+	}
+	if entry.Type != TypeHash {
+		return nil, nil, false, ErrWrongType
+	}
+
+	hash, ok := entry.Value.(map[string]string)
+	if !ok {
+		return nil, nil, false, ErrInvalidValue
+	}
+	return hash, entry, true, nil
+}
+
+func (s *Store) getHashRLocked(key string) (map[string]string, *Entry, bool, error) {
+	entry, ok := s.entries[key]
+	if !ok || s.isExpired(entry) {
 		return nil, nil, false, nil
 	}
 	if entry.Type != TypeHash {
