@@ -1,0 +1,23 @@
+{
+  "name": "gomemkv-redis-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Integration tests for gomemkv — extracted from erion-raven Redis usage",
+  "scripts": {
+    "test": "jest --forceExit --verbose",
+    "test:strings": "jest strings --forceExit --verbose",
+    "test:hashes": "jest hashes --forceExit --verbose",
+    "test:sets": "jest sets --forceExit --verbose",
+    "test:keys": "jest keys --forceExit --verbose",
+    "test:sorted-sets": "jest sorted-sets --forceExit --verbose",
+    "test:pubsub": "jest pubsub --forceExit --verbose",
+    "test:transactions": "jest transactions --forceExit --verbose",
+    "test:patterns": "jest presence rate-limit --forceExit --verbose"
+  },
+  "dependencies": {
+    "redis": "^4.6.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
