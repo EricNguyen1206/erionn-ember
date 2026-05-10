@@ -1,5 +1,5 @@
-// Pub/Sub — erion-raven uses: PUBLISH for real-time chat events
-// chat:conversation:*, conversation:*:events, user:*:notifications
+// Covers: PUBLISH, SUBSCRIBE, UNSUBSCRIBE
+// Context: Online Game — world boss spawn alerts, global system announcements, private messages
 const { createClient } = require('redis')
 const { REDIS_URL } = require('./redis')
 
@@ -20,9 +20,15 @@ describe('Pub/Sub — PUBLISH / SUBSCRIBE', () => {
     await subscriber.quit()
   })
 
-  it('PUBLISH delivers message to subscriber (erion-raven chat pattern)', async () => {
-    const channel = 'test:pubsub:chat:conv:1'
-    const message = JSON.stringify({ from: 'user-1', text: 'hello' })
+  // Test 1: PUBLISH delivers message to subscriber
+  it('PUBLISH delivers message — notify world of boss spawn', async () => {
+    const channel = 'game:pubsub:world_events'
+    const message = JSON.stringify({
+      event: 'BOSS_SPAWN',
+      bossName: 'Ancient Dragon',
+      location: 'Crystal Peak',
+      level: 99,
+    })
 
     const received = new Promise((resolve) => {
       subscriber.subscribe(channel, (msg) => {
@@ -30,7 +36,6 @@ describe('Pub/Sub — PUBLISH / SUBSCRIBE', () => {
       })
     })
 
-    // Small delay to ensure subscription is active
     await new Promise((r) => setTimeout(r, 100))
     await publisher.publish(channel, message)
 
@@ -39,9 +44,15 @@ describe('Pub/Sub — PUBLISH / SUBSCRIBE', () => {
     await subscriber.unsubscribe(channel)
   })
 
-  it('PUBLISH to user notification channel (erion-raven notification pattern)', async () => {
-    const channel = 'test:pubsub:user:user-1:notifications'
-    const message = JSON.stringify({ type: 'friend_online', userId: 'user-2' })
+  // Test 2: PUBLISH to private player notification channel
+  it('PUBLISH to player notification — trade request received', async () => {
+    const channel = 'game:pubsub:player:1001:notifications'
+    const message = JSON.stringify({
+      type: 'trade_request',
+      from: 'ShadowWalker',
+      itemId: 'sword_001',
+      expiresIn: 30,
+    })
 
     const received = new Promise((resolve) => {
       subscriber.subscribe(channel, (msg) => {
@@ -53,16 +64,22 @@ describe('Pub/Sub — PUBLISH / SUBSCRIBE', () => {
     await publisher.publish(channel, message)
 
     const result = await received
-    expect(JSON.parse(result)).toEqual({ type: 'friend_online', userId: 'user-2' })
+    expect(JSON.parse(result)).toEqual({
+      type: 'trade_request',
+      from: 'ShadowWalker',
+      itemId: 'sword_001',
+      expiresIn: 30,
+    })
     await subscriber.unsubscribe(channel)
   })
 
-  it('PUBLISH returns subscriber count', async () => {
-    const channel = 'test:pubsub:count'
+  // Test 3: PUBLISH returns subscriber count
+  it('PUBLISH returns subscriber count — multiple players receive global announcement', async () => {
+    const channel = 'game:pubsub:global_announcements'
     await subscriber.subscribe(channel, () => {})
     await new Promise((r) => setTimeout(r, 100))
 
-    const receivers = await publisher.publish(channel, 'test')
+    const receivers = await publisher.publish(channel, 'Server maintenance in 30 minutes!')
     expect(receivers).toBeGreaterThanOrEqual(1)
     await subscriber.unsubscribe(channel)
   })

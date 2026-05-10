@@ -1,5 +1,5 @@
-// Hashes — erion-raven uses: HSET, HGET, HGETALL
-// Also covers: HDEL (supported by gomemkv)
+// Covers: HSET, HGET, HGETALL, HDEL
+// Context: Online Game — player profiles, item stats, guild info
 const { createRedisClient } = require('./redis')
 
 describe('Hashes — HSET / HGET / HGETALL / HDEL', () => {
@@ -14,66 +14,86 @@ describe('Hashes — HSET / HGET / HGETALL / HDEL', () => {
   })
 
   afterEach(async () => {
-    await client.del(['test:hash:user:1', 'test:hash:migration'])
+    await client.del([
+      'player:1001:profile',
+      'item:2001:stats',
+      'guild:dragon_slayers:info',
+    ])
   })
 
-  it('HSET + HGET single field (erion-raven user status pattern)', async () => {
-    await client.hSet('test:hash:user:1', 'status', 'online')
-    const status = await client.hGet('test:hash:user:1', 'status')
-    expect(status).toBe('online')
+  // Test 1: HSET + HGET single field
+  it('HSET + HGET single field — store player level', async () => {
+    await client.hSet('player:1001:profile', 'level', '42')
+    const level = await client.hGet('player:1001:profile', 'level')
+    expect(level).toBe('42')
   })
 
-  it('HSET multiple fields at once (erion-raven user status pattern)', async () => {
-    await client.hSet('test:hash:user:1', {
-      userId: 'user-1',
-      status: 'online',
-      lastSeen: Date.now().toString(),
+  // Test 2: HSET multiple fields at once
+  it('HSET multiple fields — store full player profile', async () => {
+    await client.hSet('player:1001:profile', {
+      username: 'ShadowWalker',
+      level: '42',
+      class: 'Assassin',
+      gold: '1500',
     })
-    const status = await client.hGet('test:hash:user:1', 'status')
-    expect(status).toBe('online')
-    const userId = await client.hGet('test:hash:user:1', 'userId')
-    expect(userId).toBe('user-1')
+    const username = await client.hGet('player:1001:profile', 'username')
+    expect(username).toBe('ShadowWalker')
+    const gold = await client.hGet('player:1001:profile', 'gold')
+    expect(gold).toBe('1500')
   })
 
-  it('HGET returns undefined for non-existent field', async () => {
-    await client.hSet('test:hash:user:1', 'status', 'online')
-    const val = await client.hGet('test:hash:user:1', 'nonexistent')
+  // Test 3: HGET returns null for non-existent field
+  it('HGET returns null for non-existent field', async () => {
+    await client.hSet('player:1001:profile', 'username', 'ShadowWalker')
+    const val = await client.hGet('player:1001:profile', 'achievements')
     expect(val).toBeNull()
   })
 
-  it('HGETALL returns all fields (erion-raven migration status pattern)', async () => {
-    await client.hSet('test:hash:migration', {
-      version: '3',
-      status: 'completed',
-      timestamp: '2024-01-01',
+  // Test 4: HGETALL returns all fields
+  it('HGETALL returns all fields — view item stats', async () => {
+    await client.hSet('item:2001:stats', {
+      name: 'Excalibur',
+      type: 'Sword',
+      damage: '150',
+      rarity: 'Legendary',
+      durability: '100',
     })
-    const all = await client.hGetAll('test:hash:migration')
+    const all = await client.hGetAll('item:2001:stats')
     expect(all).toEqual({
-      version: '3',
-      status: 'completed',
-      timestamp: '2024-01-01',
+      name: 'Excalibur',
+      type: 'Sword',
+      damage: '150',
+      rarity: 'Legendary',
+      durability: '100',
     })
   })
 
+  // Test 5: HGETALL returns empty object for non-existent key
   it('HGETALL returns empty object for non-existent key', async () => {
-    const all = await client.hGetAll('test:hash:nonexistent')
+    const all = await client.hGetAll('player:9999:profile')
     expect(all).toEqual({})
   })
 
-  it('HDEL removes specific field', async () => {
-    await client.hSet('test:hash:user:1', {
-      status: 'online',
-      lastSeen: 'now',
+  // Test 6: HDEL removes specific field
+  it('HDEL removes specific field — remove player temporary title', async () => {
+    await client.hSet('player:1001:profile', {
+      username: 'ShadowWalker',
+      title: 'Dragon Slayer',
+      level: '42',
     })
-    await client.hDel('test:hash:user:1', 'lastSeen')
-    const remaining = await client.hGetAll('test:hash:user:1')
-    expect(remaining).toEqual({ status: 'online' })
+    await client.hDel('player:1001:profile', 'title')
+    const remaining = await client.hGetAll('player:1001:profile')
+    expect(remaining).toEqual({
+      username: 'ShadowWalker',
+      level: '42',
+    })
   })
 
-  it('HSET overwrites existing field', async () => {
-    await client.hSet('test:hash:user:1', 'status', 'online')
-    await client.hSet('test:hash:user:1', 'status', 'offline')
-    const status = await client.hGet('test:hash:user:1', 'status')
-    expect(status).toBe('offline')
+  // Test 7: HSET overwrites existing field
+  it('HSET overwrites existing field — update player gold after purchase', async () => {
+    await client.hSet('player:1001:profile', 'gold', '1500')
+    await client.hSet('player:1001:profile', 'gold', '1200')
+    const gold = await client.hGet('player:1001:profile', 'gold')
+    expect(gold).toBe('1200')
   })
 })

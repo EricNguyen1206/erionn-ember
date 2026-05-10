@@ -1,5 +1,5 @@
-// Sets — erion-raven uses: SADD, SREM, SMEMBERS, SISMEMBER
-// Also covers: SCARD (used in erion-raven conversation participant count)
+// Covers: SADD, SREM, SMEMBERS, SISMEMBER, SCARD
+// Context: Online Game — guild members, inventory, achievements, friend lists
 const { createRedisClient } = require('./redis')
 
 describe('Sets — SADD / SREM / SMEMBERS / SISMEMBER / SCARD', () => {
@@ -15,64 +15,72 @@ describe('Sets — SADD / SREM / SMEMBERS / SISMEMBER / SCARD', () => {
 
   afterEach(async () => {
     await client.del([
-      'test:set:online_users',
-      'test:set:conv:1:members',
-      'test:set:user:1:conversations'
+      'guild:dragon_slayers:members',
+      'player:1001:inventory',
+      'game:achievements:rare',
+      'player:1001:friends',
+      'player:1002:friends',
     ])
   })
 
-  it('SADD + SMEMBERS basic (erion-raven online users pattern)', async () => {
-    await client.sAdd('test:set:online_users', 'user-1')
-    await client.sAdd('test:set:online_users', 'user-2')
-    const members = await client.sMembers('test:set:online_users')
-    expect(members.sort()).toEqual(['user-1', 'user-2'])
+  // Test 1: SADD + SMEMBERS basic operations
+  it('SADD + SMEMBERS basic — add members to a guild', async () => {
+    await client.sAdd('guild:dragon_slayers:members', 'ShadowWalker')
+    await client.sAdd('guild:dragon_slayers:members', 'LightBringer')
+    await client.sAdd('guild:dragon_slayers:members', 'FireMage')
+    const members = await client.sMembers('guild:dragon_slayers:members')
+    expect(members.sort()).toEqual(['FireMage', 'LightBringer', 'ShadowWalker'])
   })
 
-  it('SADD ignores duplicates', async () => {
-    await client.sAdd('test:set:online_users', 'user-1')
-    const added = await client.sAdd('test:set:online_users', 'user-1')
+  // Test 2: SADD ignores duplicates
+  it('SADD ignores duplicates — no duplicate guild members', async () => {
+    await client.sAdd('guild:dragon_slayers:members', 'ShadowWalker')
+    const added = await client.sAdd('guild:dragon_slayers:members', 'ShadowWalker')
     expect(added).toBe(0)
   })
 
-  it('SISMEMBER checks membership (erion-raven presence check)', async () => {
-    await client.sAdd('test:set:online_users', 'user-1')
-    const isOnline = await client.sIsMember('test:set:online_users', 'user-1')
-    expect(isOnline).toBe(true)
-    const isOffline = await client.sIsMember('test:set:online_users', 'user-99')
-    expect(isOffline).toBe(false)
+  // Test 3: SISMEMBER checks membership
+  it('SISMEMBER checks membership — check if player has an item', async () => {
+    await client.sAdd('player:1001:inventory', 'excalibur')
+    const hasExcalibur = await client.sIsMember('player:1001:inventory', 'excalibur')
+    expect(hasExcalibur).toBe(true)
+    const hasShield = await client.sIsMember('player:1001:inventory', 'wooden_shield')
+    expect(hasShield).toBe(false)
   })
 
-  it('SREM removes member (erion-raven offline pattern)', async () => {
-    await client.sAdd('test:set:online_users', 'user-1')
-    await client.sAdd('test:set:online_users', 'user-2')
-    await client.sRem('test:set:online_users', 'user-1')
-    const members = await client.sMembers('test:set:online_users')
-    expect(members).toEqual(['user-2'])
+  // Test 4: SREM removes member
+  it('SREM removes member — remove item from inventory', async () => {
+    await client.sAdd('player:1001:inventory', 'potion_hp')
+    await client.sAdd('player:1001:inventory', 'potion_mp')
+    await client.sRem('player:1001:inventory', 'potion_hp')
+    const members = await client.sMembers('player:1001:inventory')
+    expect(members).toEqual(['potion_mp'])
   })
 
+  // Test 5: SMEMBERS returns empty for non-existent key
   it('SMEMBERS returns empty for non-existent key', async () => {
-    const members = await client.sMembers('test:set:nonexistent')
+    const members = await client.sMembers('player:1001:inventory:nonexistent')
     expect(members).toEqual([])
   })
 
-  it('SCARD returns set size (erion-raven participant count)', async () => {
-    await client.sAdd('test:set:conv:1:members', 'user-1')
-    await client.sAdd('test:set:conv:1:members', 'user-2')
-    await client.sAdd('test:set:conv:1:members', 'user-3')
-    const count = await client.sCard('test:set:conv:1:members')
+  // Test 6: SCARD returns set size
+  it('SCARD returns set size — count rare achievements', async () => {
+    await client.sAdd('game:achievements:rare', 'DragonSlayer')
+    await client.sAdd('game:achievements:rare', 'WorldFirst')
+    await client.sAdd('game:achievements:rare', 'LegendaryHero')
+    const count = await client.sCard('game:achievements:rare')
     expect(count).toBe(3)
   })
 
-  it('Bidirectional link pattern (erion-raven conversation membership)', async () => {
-    // conversation → members
-    await client.sAdd('test:set:conv:1:members', 'user-1')
-    // user → conversations
-    await client.sAdd('test:set:user:1:conversations', 'conv-1')
+  // Test 7: Bidirectional link pattern
+  it('Bidirectional link — player friend lists', async () => {
+    await client.sAdd('player:1001:friends', 'player-1002')
+    await client.sAdd('player:1002:friends', 'player-1001')
 
-    const convMembers = await client.sMembers('test:set:conv:1:members')
-    expect(convMembers).toEqual(['user-1'])
+    const friends1001 = await client.sMembers('player:1001:friends')
+    expect(friends1001).toEqual(['player-1002'])
 
-    const userConvs = await client.sMembers('test:set:user:1:conversations')
-    expect(userConvs).toEqual(['conv-1'])
+    const friends1002 = await client.sMembers('player:1002:friends')
+    expect(friends1002).toEqual(['player-1001'])
   })
 })

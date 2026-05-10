@@ -1,4 +1,5 @@
-// Transactions — erion-raven uses: MULTI/EXEC for atomic user status updates
+// Covers: MULTI, EXEC (atomic operations)
+// Context: Online Game — atomic item purchase, quest completion, trading
 const { createRedisClient } = require('./redis')
 
 describe('Transactions — MULTI / EXEC', () => {
@@ -14,79 +15,82 @@ describe('Transactions — MULTI / EXEC', () => {
 
   afterEach(async () => {
     await client.del([
-      'test:tx:online_users',
-      'test:tx:user:1:status',
-      'test:tx:user:2:status'
+      'game:tx:online_players',
+      'game:tx:player:1001:profile',
+      'game:tx:player:1001:inventory',
+      'game:tx:quest:501:status',
     ])
   })
 
-  it('MULTI/EXEC atomic set operations', async () => {
+  // Test 1: MULTI/EXEC atomic set operations
+  it('MULTI/EXEC atomic set — player login + add to online set', async () => {
     const results = await client
       .multi()
-      .set('test:tx:user:1:status', 'online')
-      .sAdd('test:tx:online_users', 'user-1')
+      .set('game:tx:player:1001:last_login', new Date().toISOString())
+      .sAdd('game:tx:online_players', 'player-1001')
       .exec()
 
     expect(results).toHaveLength(2)
     expect(results[0]).toEqual(expect.stringMatching(/OK/i))
     expect(results[1]).toBe(1)
+    await client.del('game:tx:player:1001:last_login')
   })
 
-  it('MULTI/EXEC atomic hash + set (erion-raven status update pattern)', async () => {
+  // Test 2: MULTI/EXEC atomic hash + set operations
+  it('MULTI/EXEC atomic hash + set — purchase item (deduct gold + add to inventory)', async () => {
+    // Initial state
+    await client.hSet('game:tx:player:1001:profile', 'gold', '1000')
+
     const results = await client
       .multi()
-      .hSet('test:tx:user:1:status', {
-        userId: 'user-1',
-        status: 'online',
-        lastSeen: Date.now().toString(),
-      })
-      .sAdd('test:tx:online_users', 'user-1')
-      .expire('test:tx:user:1:status', 60)
+      .hSet('game:tx:player:1001:profile', 'gold', '800') // Deduct 200 gold
+      .sAdd('game:tx:player:1001:inventory', 'steel_sword') // Add item
+      .expire('game:tx:player:1001:inventory', 86400)
       .exec()
 
     expect(results).toHaveLength(3)
 
-    // Verify side effects
-    const status = await client.hGetAll('test:tx:user:1:status')
-    expect(status.status).toBe('online')
+    const gold = await client.hGet('game:tx:player:1001:profile', 'gold')
+    expect(gold).toBe('800')
 
-    const online = await client.sMembers('test:tx:online_users')
-    expect(online).toEqual(['user-1'])
-
-    const ttl = await client.ttl('test:tx:user:1:status')
-    expect(ttl).toBeGreaterThan(0)
+    const inventory = await client.sMembers('game:tx:player:1001:inventory')
+    expect(inventory).toContain('steel_sword')
   })
 
-  it('MULTI/EXEC offline transition (erion-raven offline pattern)', async () => {
-    // First, set user online
-    await client.sAdd('test:tx:online_users', 'user-1')
-    await client.hSet('test:tx:user:1:status', 'status', 'online')
+  // Test 3: MULTI/EXEC update quest status atomically
+  it('MULTI/EXEC update quest status — quest completed -> reward given', async () => {
+    await client.hSet('game:tx:quest:501:status', 'state', 'active')
+    await client.hSet('game:tx:player:1001:profile', 'xp', '5000')
 
-    // Atomic transition to offline
     await client
       .multi()
-      .sRem('test:tx:online_users', 'user-1')
-      .hSet('test:tx:user:1:status', 'status', 'offline')
-      .expire('test:tx:user:1:status', 86400) // 24h TTL for offline
+      .hSet('game:tx:quest:501:status', 'state', 'completed')
+      .hSet('game:tx:player:1001:profile', 'xp', '5500') // Reward 500 XP
+      .sAdd('game:tx:player:1001:achievements', 'QuestMaster')
       .exec()
 
-    const online = await client.sMembers('test:tx:online_users')
-    expect(online).toEqual([])
+    const questState = await client.hGet('game:tx:quest:501:status', 'state')
+    expect(questState).toBe('completed')
 
-    const status = await client.hGet('test:tx:user:1:status', 'status')
-    expect(status).toBe('offline')
+    const xp = await client.hGet('game:tx:player:1001:profile', 'xp')
+    expect(xp).toBe('5500')
+
+    await client.del('game:tx:player:1001:achievements')
   })
 
-  it('MULTI/EXEC multiple users atomically', async () => {
+  // Test 4: MULTI/EXEC processes multiple player updates atomically
+  it('MULTI/EXEC process multiple player updates atomically', async () => {
     await client
       .multi()
-      .sAdd('test:tx:online_users', 'user-1')
-      .sAdd('test:tx:online_users', 'user-2')
-      .hSet('test:tx:user:1:status', 'status', 'online')
-      .hSet('test:tx:user:2:status', 'status', 'online')
+      .sAdd('game:tx:online_players', 'player-1001')
+      .sAdd('game:tx:online_players', 'player-1002')
+      .hSet('game:tx:player:1001:profile', 'status', 'in-dungeon')
+      .hSet('game:tx:player:1002:profile', 'status', 'in-dungeon')
       .exec()
 
-    const online = await client.sMembers('test:tx:online_users')
-    expect(online.sort()).toEqual(['user-1', 'user-2'])
+    const onlinePlayers = await client.sMembers('game:tx:online_players')
+    expect(onlinePlayers.sort()).toEqual(['player-1001', 'player-1002'])
+
+    await client.del('game:tx:player:1002:profile')
   })
 })

@@ -1,8 +1,8 @@
-// Presence pattern — Full simulation of erion-raven's online status tracking
-// Combines: SADD/SREM (online set) + HSET (status details) + EXPIRE (heartbeat TTL)
+// Covers: SADD, SREM, SISMEMBER, SMEMBERS, HSET, HGET, HGETALL, EXPIRE, MULTI/EXEC
+// Context: Online Game — player presence tracking (online/offline, heartbeat, status)
 const { createRedisClient } = require('./redis')
 
-describe('Presence Pattern (erion-raven)', () => {
+describe('Presence Pattern — Player online/offline tracking', () => {
   let client
 
   beforeAll(async () => {
@@ -15,87 +15,91 @@ describe('Presence Pattern (erion-raven)', () => {
 
   afterEach(async () => {
     await client.del([
-      'test:presence:online_users',
-      'test:presence:user:1:status',
-      'test:presence:user:2:status',
-      'test:presence:user:3:status'
+      'game:presence:online_players',
+      'game:presence:player:1001:status',
+      'game:presence:player:1002:status',
+      'game:presence:player:1003:status',
     ])
   })
 
-  it('user comes online', async () => {
-    const userId = 'user-1'
+  // Test 1: Player logs in (goes online)
+  it('player logs in — goes online', async () => {
+    const playerId = 'player-1001'
     const now = Date.now()
 
-    await client.sAdd('test:presence:online_users', userId)
-    await client.hSet(`test:presence:${userId}:status`, {
-      userId,
+    await client.sAdd('game:presence:online_players', playerId)
+    await client.hSet(`game:presence:${playerId}:status`, {
+      playerId,
       status: 'online',
-      lastSeen: now.toString(),
+      zone: 'Ironforge',
+      lastHeartbeat: now.toString(),
     })
-    await client.expire(`test:presence:${userId}:status`, 60)
+    await client.expire(`game:presence:${playerId}:status`, 60)
 
-    const isOnline = await client.sIsMember('test:presence:online_users', userId)
+    const isOnline = await client.sIsMember('game:presence:online_players', playerId)
     expect(isOnline).toBe(true)
 
-    const status = await client.hGetAll(`test:presence:${userId}:status`)
+    const status = await client.hGetAll(`game:presence:${playerId}:status`)
     expect(status.status).toBe('online')
-    expect(status.userId).toBe(userId)
+    expect(status.zone).toBe('Ironforge')
 
-    const ttl = await client.ttl(`test:presence:${userId}:status`)
+    const ttl = await client.ttl(`game:presence:${playerId}:status`)
     expect(ttl).toBeGreaterThan(0)
   })
 
-  it('user goes offline', async () => {
-    const userId = 'user-1'
+  // Test 2: Player logs out (goes offline)
+  it('player logs out — goes offline', async () => {
+    const playerId = 'player-1001'
 
-    // Set online first
-    await client.sAdd('test:presence:online_users', userId)
-    await client.hSet(`test:presence:${userId}:status`, 'status', 'online')
+    await client.sAdd('game:presence:online_players', playerId)
+    await client.hSet(`game:presence:${playerId}:status`, 'status', 'online')
 
-    // Transition to offline (atomic)
     await client
       .multi()
-      .sRem('test:presence:online_users', userId)
-      .hSet(`test:presence:${userId}:status`, 'status', 'offline')
-      .expire(`test:presence:${userId}:status`, 86400)
+      .sRem('game:presence:online_players', playerId)
+      .hSet(`game:presence:${playerId}:status`, 'status', 'offline')
+      .expire(`game:presence:${playerId}:status`, 86400)
       .exec()
 
-    const isOnline = await client.sIsMember('test:presence:online_users', userId)
+    const isOnline = await client.sIsMember('game:presence:online_players', playerId)
     expect(isOnline).toBe(false)
 
-    const status = await client.hGet(`test:presence:${userId}:status`, 'status')
+    const status = await client.hGet(`game:presence:${playerId}:status`, 'status')
     expect(status).toBe('offline')
   })
 
-  it('get all online users', async () => {
-    await client.sAdd('test:presence:online_users', 'user-1')
-    await client.sAdd('test:presence:online_users', 'user-2')
-    await client.sAdd('test:presence:online_users', 'user-3')
+  // Test 3: Get all online players
+  it('get all online players', async () => {
+    await client.sAdd('game:presence:online_players', 'player-1001')
+    await client.sAdd('game:presence:online_players', 'player-1002')
+    await client.sAdd('game:presence:online_players', 'player-1003')
 
-    const onlineUsers = await client.sMembers('test:presence:online_users')
-    expect(onlineUsers.sort()).toEqual(['user-1', 'user-2', 'user-3'])
+    const onlinePlayers = await client.sMembers('game:presence:online_players')
+    expect(onlinePlayers.sort()).toEqual(['player-1001', 'player-1002', 'player-1003'])
   })
 
-  it('heartbeat renews TTL', async () => {
-    const userId = 'user-1'
+  // Test 4: Heartbeat renews TTL (player client sends periodic updates)
+  it('heartbeat renews TTL — player sends periodic heartbeat', async () => {
+    const playerId = 'player-1001'
 
-    await client.hSet(`test:presence:${userId}:status`, 'status', 'online')
-    await client.expire(`test:presence:${userId}:status`, 60)
+    await client.hSet(`game:presence:${playerId}:status`, 'status', 'online')
+    await client.expire(`game:presence:${playerId}:status`, 60)
 
-    // Simulate heartbeat — renew TTL
-    await client.expire(`test:presence:${userId}:status`, 60)
+    // Simulate heartbeat some time later
+    await client.expire(`game:presence:${playerId}:status`, 60)
 
-    const ttl = await client.ttl(`test:presence:${userId}:status`)
+    const ttl = await client.ttl(`game:presence:${playerId}:status`)
     expect(ttl).toBeGreaterThan(55)
   })
 
-  it('check if specific friend is online before broadcasting', async () => {
-    await client.sAdd('test:presence:online_users', 'user-1')
+  // Test 5: Check if player is online before sending message
+  it('check if player is online before sending message', async () => {
+    await client.sAdd('game:presence:online_players', 'player-1001')
 
-    const friendOnline = await client.sIsMember('test:presence:online_users', 'user-1')
-    const friendOffline = await client.sIsMember('test:presence:online_users', 'user-99')
+    const isOnline = await client.sIsMember('game:presence:online_players', 'player-1001')
+    const isOffline = await client.sIsMember('game:presence:online_players', 'player-9999')
 
-    expect(friendOnline).toBe(true)
-    expect(friendOffline).toBe(false)
+    expect(isOnline).toBe(true)
+    expect(isOffline).toBe(false)
   })
 })

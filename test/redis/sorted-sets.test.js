@@ -1,5 +1,5 @@
-// Sorted Sets — erion-raven uses: ZADD, ZREMRANGEBYSCORE, ZCARD
-// Used for sliding window rate limiting
+// Covers: ZADD, ZREMRANGEBYSCORE, ZCARD, ZRANGE
+// Context: Online Game — global XP leaderboard, item price history, action rate limiting
 const { createRedisClient } = require('./redis')
 
 describe('Sorted Sets — ZADD / ZREMRANGEBYSCORE / ZCARD / ZRANGE', () => {
@@ -14,66 +14,72 @@ describe('Sorted Sets — ZADD / ZREMRANGEBYSCORE / ZCARD / ZRANGE', () => {
   })
 
   afterEach(async () => {
-    await client.del(['test:zset:1', 'test:zset:ratelimit'])
+    await client.del([
+      'game:leaderboard:global_xp',
+      'game:market:item_history',
+      'player:1001:action_ratelimit',
+    ])
   })
 
-  it('ZADD + ZCARD basic', async () => {
-    await client.zAdd('test:zset:1', [
-      { score: 1, value: 'a' },
-      { score: 2, value: 'b' },
-      { score: 3, value: 'c' },
+  // Test 1: ZADD + ZCARD basic operations
+  it('ZADD + ZCARD basic — global XP leaderboard', async () => {
+    await client.zAdd('game:leaderboard:global_xp', [
+      { score: 15000, value: 'ShadowWalker' },
+      { score: 20000, value: 'LightBringer' },
+      { score: 12000, value: 'FireMage' },
     ])
-    const count = await client.zCard('test:zset:1')
+    const count = await client.zCard('game:leaderboard:global_xp')
     expect(count).toBe(3)
   })
 
-  it('ZADD ignores duplicate member (updates score)', async () => {
-    await client.zAdd('test:zset:1', [{ score: 1, value: 'a' }])
-    const added = await client.zAdd('test:zset:1', [{ score: 5, value: 'a' }])
+  // Test 2: ZADD ignores duplicate member (updates score)
+  it('ZADD ignores duplicate member — update player XP', async () => {
+    await client.zAdd('game:leaderboard:global_xp', [{ score: 1000, value: 'ShadowWalker' }])
+    const added = await client.zAdd('game:leaderboard:global_xp', [{ score: 3000, value: 'ShadowWalker' }])
     expect(added).toBe(0)
-    const count = await client.zCard('test:zset:1')
+    const count = await client.zCard('game:leaderboard:global_xp')
     expect(count).toBe(1)
   })
 
-  it('ZREMRANGEBYSCORE removes entries in score range (erion-raven rate limit cleanup)', async () => {
-    await client.zAdd('test:zset:1', [
-      { score: 100, value: 'old-1' },
-      { score: 200, value: 'old-2' },
-      { score: 500, value: 'new-1' },
-      { score: 600, value: 'new-2' },
+  // Test 3: ZREMRANGEBYSCORE removes entries in score range
+  it('ZREMRANGEBYSCORE removes entries — clean up old market history', async () => {
+    const now = Date.now()
+    await client.zAdd('game:market:item_history', [
+      { score: now - 5000, value: 'sale-1' },
+      { score: now - 4000, value: 'sale-2' },
+      { score: now - 2000, value: 'sale-3' },
+      { score: now - 1000, value: 'sale-4' },
     ])
-    // Remove all entries with score < 400
-    const removed = await client.zRemRangeByScore('test:zset:1', 0, 399)
+    const removed = await client.zRemRangeByScore('game:market:item_history', 0, now - 3500)
     expect(removed).toBe(2)
-    const remaining = await client.zCard('test:zset:1')
+    const remaining = await client.zCard('game:market:item_history')
     expect(remaining).toBe(2)
   })
 
-  it('ZRANGE returns members in score order', async () => {
-    await client.zAdd('test:zset:1', [
-      { score: 3, value: 'c' },
-      { score: 1, value: 'a' },
-      { score: 2, value: 'b' },
+  // Test 4: ZRANGE returns members in ascending score order
+  it('ZRANGE returns members in score order — leaderboard ranking (lowest to highest)', async () => {
+    await client.zAdd('game:leaderboard:global_xp', [
+      { score: 5000, value: 'NovicePlayer' },
+      { score: 1000, value: 'Newbie' },
+      { score: 15000, value: 'ProPlayer' },
     ])
-    const range = await client.zRange('test:zset:1', 0, -1)
-    expect(range).toEqual(['a', 'b', 'c'])
+    const range = await client.zRange('game:leaderboard:global_xp', 0, -1)
+    expect(range).toEqual(['Newbie', 'NovicePlayer', 'ProPlayer'])
   })
 
-  it('Sliding window rate limit simulation (erion-raven pattern)', async () => {
-    const key = 'test:zset:ratelimit'
-    const windowMs = 60000 // 1 minute window
-    const maxRequests = 5
+  // Test 5: Sliding window rate limit pattern (sorted sets)
+  it('Sliding window rate limit — limit player skill usage', async () => {
+    const key = 'player:1001:action_ratelimit'
+    const windowMs = 60000
+    const maxActions = 5
     const now = Date.now()
-    const windowStart = now - windowMs
 
-    // Add 5 requests
     for (let i = 0; i < 5; i++) {
-      await client.zAdd(key, [{ score: now - i * 1000, value: `${now - i * 1000}` }])
+      await client.zAdd(key, [{ score: now - i * 1000, value: `skill-use-${now - i * 1000}` }])
     }
 
-    // Check count (simulate rate limit check)
     const count = await client.zCard(key)
     expect(count).toBe(5)
-    expect(count).toBeLessThanOrEqual(maxRequests)
+    expect(count).toBeLessThanOrEqual(maxActions)
   })
 })

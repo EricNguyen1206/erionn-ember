@@ -2,7 +2,7 @@
   "name": "gomemkv-redis-tests",
   "version": "1.0.0",
   "private": true,
-  "description": "Integration tests for gomemkv — extracted from erion-raven Redis usage",
+  "description": "Integration tests for gomemkv — Online Game Scenario examples",
   "scripts": {
     "test": "jest --forceExit --verbose",
     "test:strings": "jest strings --forceExit --verbose",
